@@ -1,6 +1,6 @@
-# Cornea-Biomechanics
+# CorneaNet-AI
 
-Welcome to **Cornea-Biomechanics**, a research-driven repository focused on the application of machine learning to ophthalmology, particularly in corneal disease detection. This project aims to advance automated diagnosis using **machine learning, deep learning techniques, and conformal prediction** to improve reliability in medical AI.
+Welcome to **CorneaNet-AI**, a research-driven repository focused on the application of machine learning to ophthalmology, particularly in corneal disease detection. This project aims to advance automated diagnosis using **machine learning, deep learning techniques, and conformal prediction** to improve reliability in medical AI.
 
 ## 🚀 Project Overview
 
