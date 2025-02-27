@@ -1,21 +1,30 @@
 """
-Cartes 3.0 : Version pour le Deep Learning
-Version dédiée à l'intégration dans le modèle de machine learning.
+Maps 3.0: Deep Learning Version
+Version dedicated to integration into the machine learning model.
 
-Points importants :
-Cette version est destinée à être utilisée directement dans le modèle CNN.
-Elle est conçue pour les tâches de deep learning en ophtalmologie.
-Nombre de couleurs doublés (40) et échelles ajustées
+Key Points:
 
-Les échelles du MS39 sont dynamiques afin de souligner la déformation pour l'ophtalmologue.
-Nous utilisons ici des échelles statiques compatibles pour le Computer Vision
-Problèmes actuels :
-Reconstructions manquantes :
-Élevations
-Ces éléments restent essentiels pour améliorer les performances du modèle.
+This version is designed to be used directly within the CNN model.
 
-Améliorations possibles :
-Prendre en compte les -1000 ici en addition au code précédent pour plus de précision.
+It is tailored for deep learning tasks in ophthalmology.
+
+Number of colors doubled (40) and scales adjusted.
+
+
+The MS39 scales are dynamic to highlight deformation for ophthalmologists.
+Here, we use static scales compatible with computer vision.
+
+Current Issues:
+
+Missing reconstructions:
+
+Elevations
+
+Possible Improvements:
+
+Consider the -1000 values here in addition to the previous code for greater accuracy.
+
+
 """
 
 colors = [
