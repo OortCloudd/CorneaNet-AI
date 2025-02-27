@@ -5,7 +5,7 @@ Welcome to **Cornea-Biomechanics**, a research-driven repository focused on the 
 ## 🚀 Project Overview
 
 - **Domain:** Medical AI, Ophthalmology, Corneal Disease Diagnosis
-- **Key Techniques:** Convolutional Neural Networks (CNNs), Conformal Prediction
+- **Key Techniques:** Geometry, CatBoost, Convolutional Neural Networks (CNNs), ViT,  Conformal Prediction
 - **Primary Objective:** Develop robust, interpretable AI models for early and accurate detection of corneal conditions such as keratoconus.
 - **Real-World Impact:** Enabling AI-assisted diagnosis in clinical settings, bridging the gap between theory and medical practice.
 
