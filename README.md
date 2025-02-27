@@ -2,6 +2,8 @@
 
 Welcome to **CorneaNet-AI**, a research-driven repository focused on the application of machine learning to ophthalmology, particularly in corneal disease detection. This project aims to advance automated diagnosis using **machine learning, deep learning techniques, and conformal prediction** to improve reliability in medical AI.
 
+⭐ Please leave a star if you find this project useful!
+
 ## 🚀 Project Overview
 
 - **Domain:** Medical AI, Ophthalmology, Corneal Disease Diagnosis
