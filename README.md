@@ -8,7 +8,7 @@ Welcome to **CorneaNet-AI**, a research-driven repository focused on the applica
 
 - **Domain:** Medical AI, Ophthalmology, Corneal Disease Diagnosis
 - **Key Techniques:** Geometry, CatBoost, Convolutional Neural Networks (CNNs), ViT,  Conformal Prediction
-- **Primary Objective:** Develop robust, interpretable AI models for early and accurate detection of corneal conditions such as keratoconus.
+- **Primary Objective:** Develop robust AI models for early and accurate detection of corneal conditions such as keratoconus and prediction of various eye metrics
 - **Real-World Impact:** Enabling AI-assisted diagnosis in clinical settings, bridging the gap between theory and medical practice.
 
 ---
