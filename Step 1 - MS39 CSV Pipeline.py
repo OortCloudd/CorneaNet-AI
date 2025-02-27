@@ -1,3 +1,22 @@
+"""
+Matrix Reconstruction: Polar to Cartesian (Version 3.0)
+Version 3.0 of the pipeline dedicated to reconstructing polar matrices into Cartesian matrices from the MS39 file.
+
+Key Points:
+The data is now circular rather than square, improving its fidelity to reality.
+A mask has been applied to filter the data and eliminate square borders, making the shape as close as possible to that of a natural eye.
+The exact number of 57,132 NaN values comes from the masked square borders.
+
+Current Status:
+Noise has significantly decreased, making this version much more accurate than previous ones.
+Next change and final change -> Add -1000 data points as blank
+This version is almost final, given its performance and achieved precision.
+
+Possible Improvements:
+-1000 values have not been accounted for in this version. It would be interesting to implement them for greater accuracy.
+Note: This pipeline represents a major advancement in data fidelity and can be used in applications requiring high precision. 
+The primary application here is leveraging Deep Learning methods in ophthalmology.
+"""
 import pandas as pd
 import numpy as np
 import os
