@@ -39,6 +39,7 @@ Welcome to **CorneaNet-AI**, a research-driven repository focused on the applica
 - **Accuracy, Sensitivity, Specificity**
 - **ROC AUC** (*not ideal but necessary for communication with ophthalmologists*)
 - **LogLoss, Cross-Entropy**
+- **R², MAE, RMSE**
 - **Uncertainty-aware AI evaluations**
 
 ---
