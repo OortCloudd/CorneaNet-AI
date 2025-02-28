@@ -26,6 +26,18 @@ Consider the -1000 values here in addition to the previous code for greater accu
 
 
 """
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+############################################################################
+#                           COLORS AND BOUNDS
+############################################################################
+
+
+
 
 colors = [
     '#57597e',
