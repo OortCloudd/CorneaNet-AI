@@ -17,11 +17,11 @@ Welcome to **CorneaNet-AI**, a research-driven repository focused on the applica
 
 ### ✅ Completed
 - **Data Transformation:** Polar to Cartesian transformation to reproduce topography images of the cornea.
-- **Model Development:** CNN-based architecture trained on corneal topography images.
+- **Model Development:** Catboost and CNN-based architectures trained on patient metadata corneal topography images.
 
 ### ⏳ In Progress
 - **Conformal Prediction Integration:** Uncertainty quantification for trustworthy AI predictions.
-- **Next Steps:** Enhancing generalization across patient populations and fine-tuning models.
+- **Next Steps:** Enhancing generalization across patient populations by combining tabular metadata with images and fine-tuning models
 
 ---
 
