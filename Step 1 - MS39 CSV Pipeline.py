@@ -27,31 +27,31 @@ import cv2
 # ('name of segment', line where it starts, number of lines to read, low interval to take into account, high interval to take into account)
 # There must be a way of improving this
 """
-segments = [
-    ('sagittal_anterior', 28, 27, -999, 10000),
-    ('tangential_anterior', 60, 27, -999, 10000),
-    ('gaussian_anterior', 92, 22, -999, 10000),
-    ('sagittal_posterior', 124, 26, -999, 10000),
-    ('tangential_posterior', 156, 26, -999, 10000),
-    ('gaussian_posterior', 188, 22, -999, 10000),
-    ('refra_frontal_power_anterior', 220, 27, -999, 10000),
-    ('refra_frontal_power_posterior', 252, 26, -999, 10000),
-    ('refra_equivalent_power', 284, 23, -999, 10000),
-    """
+"""
     Elevation maps in corneal topography require special processing. They use a reference surface, typically a Best Fitted Sphere (BFS),
     which is calculated using a least weighted squares method. 
     The elevation data can then be analyzed using Zernike polynomials,
     which are mathematical functions particularly useful for describing optical surfaces and wavefront aberrations.
     However, some kind of unknown data transformation is done by the MS39 Machine, outputing all values between 0 and 3
     Values are meaningful as they have p-values < 0.05 in statistical tests (correlations & mann-whitney keratoconus vs non-keratoconus).
-    """
-    # ('elevation_anterior', 316, 27, -999, 10000),
-    # ('elevation_posterior', 348, 26, -999, 10000),
-    # ('elevation_stromal', 380, 25, -999, 10000),
-    ('corneal_thickness', 412, 26, -999, 10000),
-    ('stromal_thickness', 444, 25, -999, 10000),
-    ('epithelial_thickness', 476, 25, -999, 10000),
-    ('anterior_chamber_depth', 508, 26, -999, 10000)
+"""
+segments = [
+    #('sagittal_anterior', 28, 27, -999, 10000),
+    #('tangential_anterior', 60, 27, -999, 10000),
+    #('gaussian_anterior', 92, 22, -999, 10000),
+    #('sagittal_posterior', 124, 26, -999, 10000),
+    #('tangential_posterior', 156, 26, -999, 10000),
+    #('gaussian_posterior', 188, 22, -999, 10000),
+    #('refra_frontal_power_anterior', 220, 27, -999, 10000),
+    #('refra_frontal_power_posterior', 252, 26, -999, 10000),
+    #('refra_equivalent_power', 284, 23, -999, 10000),
+    ('elevation_anterior', 316, 27, -999, 10000),
+    ('elevation_posterior', 348, 26, -999, 10000),
+    ('elevation_stromal', 380, 25, -999, 10000),
+    #('corneal_thickness', 412, 26, -999, 10000),
+    #('stromal_thickness', 444, 25, -999, 10000),
+    #('epithelial_thickness', 476, 25, -999, 10000),
+    #('anterior_chamber_depth', 508, 26, -999, 10000)
 ]
 
 def lire_segment(fichier, debut, n_lignes):
@@ -214,7 +214,7 @@ def process_folder(folder_path):
             print(f"[INFO] Finished processing {filename}")
 
 if __name__ == "__main__":
-    folder_path = r'Folder'
+    folder_path = r'C:\\Users\\nassd\\OneDrive\\Bureau\\15-20\\zernike'
     process_folder(folder_path)
 
     """
