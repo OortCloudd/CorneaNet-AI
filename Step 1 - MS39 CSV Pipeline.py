@@ -23,6 +23,7 @@ import os
 import time
 from scipy.interpolate import griddata
 import cv2
+import logging
 """
 # ('name of segment', line where it starts, number of lines to read, low interval to take into account, high interval to take into account)
 # There must be a way of improving this
@@ -45,14 +46,6 @@ segments = [
     ('refra_frontal_power_anterior', 220, 27, -999, 10000),
     ('refra_frontal_power_posterior', 252, 26, -999, 10000),
     ('refra_equivalent_power', 284, 23, -999, 10000),
-    """
-    Elevation maps in corneal topography require special processing. They use a reference surface, typically a Best Fitted Sphere (BFS),
-    which is calculated using a least weighted squares method. 
-    The elevation data can then be analyzed using Zernike polynomials,
-    which are mathematical functions particularly useful for describing optical surfaces and wavefront aberrations.
-    However, some kind of unknown data transformation is done by the MS39 Machine, outputing all values between 0 and 3
-    Values are meaningful as they have p-values < 0.05 in statistical tests (correlations & mann-whitney keratoconus vs non-keratoconus).
-    """
     # ('elevation_anterior', 316, 27, -999, 10000),
     # ('elevation_posterior', 348, 26, -999, 10000),
     # ('elevation_stromal', 380, 25, -999, 10000),
@@ -155,34 +148,39 @@ def process_and_interpolate(fichier, segments):
     Create a Mask on the matrix to get only eye data (An eye is round which is incompatible with a block matrix)
     """
     results = {}
+    total_processing_start_time = time.time() # Start timer for the whole file
+
     for seg in segments:
         name, start_row, num_rows, min_val, max_val = seg
-        start_time = time.time()
-        print(f"[INFO] Processing segment: {name}")
+        segment_start_time = time.time() # Start timer for this specific segment
+
+        logging.info(f"Processing segment: {name}")
+        
+        # --- 1. Log the reading time ---
+        read_start = time.time()
         df = lire_segment(fichier, start_row, num_rows)
+        logging.info(f" -> [{name}] Reading from CSV took: {time.time() - read_start:.4f} seconds.")
+
         if df.empty:
-            print(f"[WARNING] Segment {name} empty or impossible to read.")
+            logging.warning(f"Segment {name} empty or impossible to read.")
             continue
 
-        # Filter out-of-bounds values
+        # --- 2. Log the data cleaning time ---
+        clean_start = time.time()
         df = df.mask((df < min_val) | (df > max_val))
-        # -1000 => np.nan
         df = df.replace(-1000, np.nan)
-        # Remove rows that are entirely NaN
         df = df.dropna(axis=0, how='all')
+        logging.info(f" -> [{name}] Data cleaning took: {time.time() - clean_start:.4f} seconds.")
 
-        nan_count = df.isna().sum().sum()
-        print(f"[DEBUG] {name} - Dimensions before interp: {df.shape}, Number of NaN: {nan_count}")
-
-        # Conversion polar->cartesian (512x512) + smoothing
+        # --- 3. Log the interpolation time (THE MOST IMPORTANT ONE) ---
+        interp_start = time.time()
         cart_df = polar_to_cartesian(df, target_size=512)
-        nan_count_cart = cart_df.isna().sum().sum()
-        print(f"[DEBUG] {name} - Dimensions after interp: {cart_df.shape}, Number of NaN: {nan_count_cart}")
-
+        logging.info(f" -> [{name}] polar_to_cartesian (interpolation) took: {time.time() - interp_start:.4f} seconds.")
+        
         results[name] = cart_df
-        elapsed = time.time() - start_time
-        print(f"[INFO] Segment {name} processed in {elapsed:.2f} seconds.")
+        logging.info(f"Segment {name} total time: {time.time() - segment_start_time:.2f} seconds.")
 
+    logging.info(f"Total processing time for all segments in {os.path.basename(fichier)}: {time.time() - total_processing_start_time:.2f} seconds.")
     return results
 
 
@@ -208,22 +206,39 @@ def save_to_hdf(results, output_file):
 def process_folder(folder_path):
     """
     Export all of the matrices into hdf5 format
-    .xlsx was too heavy and .npy introduced unknown bugs and variations in the final output.
     """
     for filename in os.listdir(folder_path):
         if filename.endswith('.csv'):
+            # --- TIMER FOR ONE FILE ---
+            file_total_start_time = time.time() # <--- ADD THIS
+
             fichier = os.path.join(folder_path, filename)
-            # Output name .h5 instead of .xlsx
             output_hdf_filename = os.path.splitext(filename)[0] + '.h5'
             output_hdf_path = os.path.join(folder_path, output_hdf_filename)
-            print(f"[INFO] Beginning processing of file {filename}")
+            
+            logging.info(f"Beginning processing of file {filename}")
             results = process_and_interpolate(fichier, segments)
+
+            save_start = time.time()
             save_to_hdf(results, output_hdf_path)
-            print(f"[INFO] Finished processing {filename}")
+            logging.info(f"Saving to HDF5 took: {time.time() - save_start:.4f} seconds.")
+            
+            # --- LOG TOTAL TIME FOR THE FILE ---
+            total_file_time = time.time() - file_total_start_time # <--- ADD THIS
+            logging.info(f"*** Total time for {filename}: {total_file_time:.2f} seconds ***\n") # <--- ADD THIS
 
 if __name__ == "__main__":
-    folder_path = r'Folder'
+    # --- GRAND TOTAL TIMER ---
+    script_start_time = time.time() # <--- ADD THIS
+
+    folder_path = r'C:\Users\nassd\OneDrive\Bureau\15-20\RefCartesTest'
     process_folder(folder_path)
+
+    # --- LOG GRAND TOTAL TIME ---
+    total_script_time = time.time() - script_start_time # <--- ADD THIS
+    logging.info(f"======================================================") # <--- ADD THIS
+    logging.info(f"GRAND TOTAL for all files took: {total_script_time:.2f} seconds") # <--- ADD THIS
+    logging.info(f"======================================================") # <--- ADD THIS
 
     """
     Onto Step 2 - Colormaps
