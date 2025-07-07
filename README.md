@@ -48,7 +48,7 @@ Welcome to **CorneaNet-AI**, a research-driven repository focused on the applica
 Contributions are welcome! Feel free to submit issues, feature requests, or pull requests to improve the project.
 
 ## 📄 License
-This project is licensed under the MIT License.
+This project is licensed under the MIT License..
 
 ## 📬 Contact
 For any inquiries, feel free to reach out via GitHub issues or email.
