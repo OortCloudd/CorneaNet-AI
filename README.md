@@ -29,7 +29,7 @@ Corneal diseases like keratoconus can lead to vision loss if not detected early,
 
 ## 📝 Publications
 This work has led to two peer-reviewed papers published in ophthalmology and medical AI journals, validating the project’s impact and methods. 
-See my GitHub profile for titles and links or contact me for details. You can also visit my website nassimlouissi.com for more
+See my GitHub profile for titles and links or contact me for details. You can also visit my website [nassimlouissi.com](https://nassimlouissi.com) for more
 
 ---
 
