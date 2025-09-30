@@ -28,7 +28,8 @@ Corneal diseases like keratoconus can lead to vision loss if not detected early,
 - **Next Steps**: Improving model generalization by combining tabular metadata with images and fine-tuning for diverse patient populations
 
 ## 📝 Publications
-This work has led to two peer-reviewed papers published in ophthalmology and medical AI journals, validating the project’s impact and methods. See my GitHub profile for titles and links or contact me for details.
+This work has led to two peer-reviewed papers published in ophthalmology and medical AI journals, validating the project’s impact and methods. 
+See my GitHub profile for titles and links or contact me for details. You can also visit my website nassimlouissi.com for more
 
 ---
 
