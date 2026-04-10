@@ -25,7 +25,6 @@ import numpy as np
 from scipy.optimize import least_squares as _scipy_least_squares
 from scipy.spatial import cKDTree
 
-
 # ===========================================================================
 # Ray-tracing primitives (formerly ray_trace.py)
 # ===========================================================================
@@ -255,9 +254,7 @@ def _bq_fit_full(
     n = len(x_nbr)
     if n < 6:
         raise ValueError(f"Need >= 6 neighbors for biquadratic fit, got {n}")
-    A = np.column_stack(
-        [x_nbr * x_nbr, y_nbr * y_nbr, x_nbr, y_nbr, x_nbr * y_nbr, np.ones(n)]
-    )
+    A = np.column_stack([x_nbr * x_nbr, y_nbr * y_nbr, x_nbr, y_nbr, x_nbr * y_nbr, np.ones(n)])
     coeffs, _, _, _ = np.linalg.lstsq(A, z_nbr, rcond=None)
     return coeffs
 
@@ -369,6 +366,7 @@ def _biquad_eval_dual_batch(
         post_coeffs_out[i] = pcoeffs
         valid[i] = True
     return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
+
 
 # Radial step size: 0.2mm between rings
 _R_STEP_MM = 0.2

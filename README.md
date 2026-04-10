@@ -2,8 +2,6 @@
 
 On-premise corneal topography pipeline for the CSO MS-39. Parses raw CSV exports, computes ~2,400 clinical features, and serves predictions via FastAPI.
 
-Built for production inference at CHNO des Quinze-Vingts, Paris.
-
 ## Architecture
 
 ```

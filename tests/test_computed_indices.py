@@ -1169,8 +1169,7 @@ class TestOPDRaytraceSphere:
         """A near-spherical surface should produce small HOA coefficients."""
         import numpy as np
 
-        from corneaforge.computed_indices import _opd_raytrace_one_diameter
-        from corneaforge.computed_indices import N_AIR, N_CORNEA
+        from corneaforge.computed_indices import N_AIR, N_CORNEA, _opd_raytrace_one_diameter
 
         # Build a synthetic sphere polar map (R=7.8mm)
         R = 7.8
@@ -1199,8 +1198,7 @@ class TestOPDRaytraceSphere:
 
     def test_raytrace_returns_none_on_none_map(self):
         """Should return (None, None) when polar_map is None."""
-        from corneaforge.computed_indices import _opd_raytrace_one_diameter
-        from corneaforge.computed_indices import N_AIR, N_CORNEA
+        from corneaforge.computed_indices import N_AIR, N_CORNEA, _opd_raytrace_one_diameter
 
         coeffs, focal_z = _opd_raytrace_one_diameter(None, 1.0, N_AIR, N_CORNEA)
         assert coeffs is None
@@ -1210,8 +1208,7 @@ class TestOPDRaytraceSphere:
         """Should return (None, None) when polar_map is all -1000."""
         import numpy as np
 
-        from corneaforge.computed_indices import _opd_raytrace_one_diameter
-        from corneaforge.computed_indices import N_AIR, N_CORNEA
+        from corneaforge.computed_indices import N_AIR, N_CORNEA, _opd_raytrace_one_diameter
 
         polar_map = np.full((31, 256), -1000.0)
         coeffs, focal_z = _opd_raytrace_one_diameter(polar_map, 1.0, N_AIR, N_CORNEA)
@@ -1222,8 +1219,7 @@ class TestOPDRaytraceSphere:
         """Piston coefficient (j=0) should be zeroed."""
         import numpy as np
 
-        from corneaforge.computed_indices import _opd_raytrace_one_diameter
-        from corneaforge.computed_indices import N_AIR, N_CORNEA
+        from corneaforge.computed_indices import N_AIR, N_CORNEA, _opd_raytrace_one_diameter
 
         R = 7.8
         n_rows, n_cols = 31, 256
@@ -1247,8 +1243,7 @@ class TestOPDRaytraceSphere:
         """Should return 36 Zernike coefficients (order 7, matching CSO NPol=36)."""
         import numpy as np
 
-        from corneaforge.computed_indices import _opd_raytrace_one_diameter
-        from corneaforge.computed_indices import N_AIR, N_CORNEA
+        from corneaforge.computed_indices import N_AIR, N_CORNEA, _opd_raytrace_one_diameter
 
         R = 7.8
         n_rows, n_cols = 31, 256
@@ -1272,8 +1267,7 @@ class TestOPDRaytraceSphere:
         """Should return None when fitting_radius exceeds map data extent."""
         import numpy as np
 
-        from corneaforge.computed_indices import _opd_raytrace_one_diameter
-        from corneaforge.computed_indices import N_AIR, N_CORNEA
+        from corneaforge.computed_indices import N_AIR, N_CORNEA, _opd_raytrace_one_diameter
 
         # 31 rows * 0.2mm/row = 6.0mm max radius. Request 7.0mm.
         R = 7.8

@@ -9,7 +9,6 @@ import numpy as np
 from corneaforge.descriptive_stats import SEGMENTS_ENABLED, _angular_sectors
 from corneaforge.descriptive_stats import process_single_csv as stats_process
 
-
 # ==========================================================================
 # Helpers
 # ==========================================================================
@@ -228,8 +227,14 @@ class TestFeatureTypes:
         mock_meta.return_value = FAKE_METADATA.copy()
         row = stats_process("/fake/patient.csv")
         metadata_keys = {
-            "filename", "patient_last_name", "patient_first_name",
-            "patient_id", "patient_dob", "patient_gender", "exam_eye", "exam_date",
+            "filename",
+            "patient_last_name",
+            "patient_first_name",
+            "patient_id",
+            "patient_dob",
+            "patient_gender",
+            "exam_eye",
+            "exam_date",
         }
         for key, val in row.items():
             if key in metadata_keys:

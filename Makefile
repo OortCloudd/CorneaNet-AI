@@ -18,21 +18,23 @@ install:
 install-server:
 	uv sync --extra dev --extra server
 
+TRACKED_PY = $(shell git ls-files '*.py')
+
 lint:
-	ruff check src/ tests/
-	ruff format --check src/ tests/
+	uv run ruff check $(TRACKED_PY)
+	uv run ruff format --check $(TRACKED_PY)
 
 format:
-	ruff check --fix src/ tests/
-	ruff format src/ tests/
+	uv run ruff check --fix $(TRACKED_PY)
+	uv run ruff format $(TRACKED_PY)
 
 test:
-	pytest -q --tb=short
+	uv run pytest -q --tb=short
 
 check: lint test
 
 serve:
-	uvicorn corneaforge.server:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn corneaforge.server:app --reload --host 0.0.0.0 --port 8000
 
 docker:
 	docker build -t corneaforge .
