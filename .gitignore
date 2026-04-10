@@ -16,6 +16,9 @@ test_visual*/
 # Legacy scripts (kept locally for reference, not tracked)
 legacy/
 
+# Local test scripts with patient data paths
+compare_both_eyes.py
+
 # Internal modules — useful but not public yet
 src/corneaforge/dat_reader.py
 

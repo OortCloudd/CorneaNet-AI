@@ -499,8 +499,105 @@ def _find_extremum(polar_map, mode="min", max_radius=None):
             best_row = i
             best_col = j
 
-    # If we never found a valid local extremum, fall back to the center value
-    # (CSO behaviour: returns vals[0,0] with location (0,0)).
+    # If we found a valid local extremum (not the center fallback), return it.
+    if best_row != 0 or best_col != 0:
+        r_mm = best_row * _R_STEP_MM
+        x_mm = float(r_mm * _COS_THETA[best_col])
+        y_mm = float(r_mm * _SIN_THETA[best_col])
+        return float(best_val), x_mm, y_mm
+
+    # -------------------------------------------------------------------
+    # Fallback for severe KC: The strict CSO algorithm (local extremum +
+    # 5x5 hole-free check) can fail when the thinnest / steepest point is
+    # surrounded by missing data (common in severe KC where OCT loses the
+    # posterior surface near the cone tip).
+    #
+    # Strategy: relax the hole check to N=1 (3x3 neighborhood), still
+    # requiring a local extremum.  If that also fails, use a global
+    # argmin/argmax within a safe radius (< 4.0 mm) to avoid peripheral
+    # artifacts.
+    # -------------------------------------------------------------------
+
+    # Pass 2: relaxed hole check (N=1, 3x3 neighborhood)
+    relaxed_neighbor = 1
+    for i in range(1, n_rows - 1):
+        if max_radius is not None and (i + 1) * _R_STEP_MM >= max_radius:
+            continue
+        if i * _R_STEP_MM > checkpoint_radius:
+            continue
+
+        for j in range(n_cols):
+            v = vals[i, j]
+            if holes[i, j]:
+                continue
+
+            jp1 = (j + 1) % n_cols
+            jm1 = (j - 1 + n_cols) % n_cols
+            if is_min:
+                if not (
+                    v < vals[i - 1, j]
+                    and v < vals[i + 1, j]
+                    and v < vals[i, jp1]
+                    and v < vals[i, jm1]
+                ):
+                    continue
+                if v >= best_val:
+                    continue
+            else:
+                if not (
+                    v > vals[i - 1, j]
+                    and v > vals[i + 1, j]
+                    and v > vals[i, jp1]
+                    and v > vals[i, jm1]
+                ):
+                    continue
+                if v <= best_val:
+                    continue
+
+            ok = True
+            i_lo = max(0, i - relaxed_neighbor)
+            i_hi = min(i + relaxed_neighbor, n_rows)
+            for ki in range(i_lo, i_hi):
+                for kj_off in range(-relaxed_neighbor, relaxed_neighbor):
+                    cj = (j + kj_off + n_cols) % n_cols
+                    if holes[ki, cj]:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if not ok:
+                continue
+
+            best_val = v
+            best_row = i
+            best_col = j
+
+    if best_row != 0 or best_col != 0:
+        r_mm = best_row * _R_STEP_MM
+        x_mm = float(r_mm * _COS_THETA[best_col])
+        y_mm = float(r_mm * _SIN_THETA[best_col])
+        return float(best_val), x_mm, y_mm
+
+    # Pass 3: global search within safe radius (no local-extremum requirement)
+    # Only used as last resort to avoid returning center value for pathological
+    # eyes.  Limited to radius < 4.0 mm to avoid peripheral artifacts.
+    safe_radius = min(checkpoint_radius, 4.0)
+    for i in range(1, n_rows):
+        if i * _R_STEP_MM > safe_radius:
+            break
+        for j in range(n_cols):
+            v = vals[i, j]
+            if holes[i, j]:
+                continue
+            if is_min and v < best_val:
+                best_val = v
+                best_row = i
+                best_col = j
+            elif not is_min and v > best_val:
+                best_val = v
+                best_row = i
+                best_col = j
+
     if best_row == 0 and best_col == 0:
         if holes[0, 0]:
             return None, 0.0, 0.0
@@ -509,7 +606,6 @@ def _find_extremum(polar_map, mode="min", max_radius=None):
     r_mm = best_row * _R_STEP_MM
     x_mm = float(r_mm * _COS_THETA[best_col])
     y_mm = float(r_mm * _SIN_THETA[best_col])
-
     return float(best_val), x_mm, y_mm
 
 
@@ -2530,8 +2626,13 @@ def _compute_ctsp(clean_thk, center_x, center_y, max_radius=3.0):
     n_rings = min(n_rows, int(max_radius / _R_STEP_MM) + 1)
 
     ctsp = np.full(n_rings, np.nan)
-    min_valid_per_ring = (2 * n_cols) // 3
+    # CSO requires 2/3 of meridians.  For severe KC with holes near the
+    # cone, relax to 1/3 as a minimum -- the annular average is still
+    # stable with ~85 points.
+    min_valid_relaxed = n_cols // 3
 
+    had_good_ring = False
+    consecutive_bad_after_good = 0
     for i in range(n_rings):
         r_mm = i * _R_STEP_MM
         count = 0
@@ -2553,14 +2654,21 @@ def _compute_ctsp(clean_thk, center_x, center_y, max_radius=3.0):
                 total += val
                 count += 1
 
-        if count >= min_valid_per_ring:
+        if count >= min_valid_relaxed:
             ctsp[i] = total / count
+            had_good_ring = True
+            consecutive_bad_after_good = 0
         else:
-            # Stop at the first invalid ring
-            break
+            # In severe KC, the innermost rings (near the cone) may have
+            # holes from OCT posterior-surface loss.  Don't stop scanning
+            # until we've had good rings and then hit a gap.
+            if had_good_ring:
+                consecutive_bad_after_good += 1
+                if consecutive_bad_after_good >= 2:
+                    break
 
     valid_rings = int(np.sum(~np.isnan(ctsp)))
-    if valid_rings < 5:
+    if valid_rings < 3:
         return None
 
     return ctsp
@@ -3276,6 +3384,18 @@ def compute_kc_classification(
         Keys: ``kc_morphology_type`` (int), ``kc_morphology_name`` (str).
     """
     unknown = {"kc_morphology_type": -1, "kc_morphology_name": "Unknown"}
+
+    # Auto-compute missing prerequisites from raw data
+    if k_readings is None:
+        k_readings = compute_k_readings(raw_segments, metadata)
+    if shape_results is None:
+        shape_results = compute_shape_indices(raw_segments)
+    if zernike_results is None:
+        zernike_results = compute_zernike_indices(raw_segments, metadata)
+    if screening_extrema is None:
+        screening_extrema = compute_screening_extrema(
+            raw_segments, metadata, zernike_results=zernike_results
+        )
 
     # Extract SimK KAvg (mm) from K-readings
     kavg_mm = None
@@ -5988,32 +6108,39 @@ def _compute_is_value(sag_ant_map):
     """
     clean = sag_ant_map.astype(np.float64)
     clean[clean == _MISSING] = np.nan
+    n_rows = clean.shape[0]
 
-    # Use rings at r ~ 1.5 mm (3 mm diameter): rows 7-8 (1.4-1.6 mm)
-    # Average both for noise reduction
-    rows = [7, 8]  # r = 1.4 mm and 1.6 mm
+    # Use rings at r ~ 1.5 mm (3 mm diameter).  Preferred rows 7-8
+    # (1.4-1.6 mm), but severe KC eyes with poor fixation may have
+    # these rows missing.  Fall back to wider band [6..10] (1.2-2.0 mm)
+    # to avoid returning None for the most pathological eyes.
+    preferred_rows = [7, 8]
+    fallback_rows = [r for r in range(6, 11) if r < n_rows]
 
     # Inferior sector: 225-315 deg TABO (columns 160-224 for 256 meridians)
     inf_cols = list(range(160, 224))
     # Superior sector: 45-135 deg TABO (columns 32-96)
     sup_cols = list(range(32, 96))
 
-    inf_vals = []
-    sup_vals = []
-    for row in rows:
-        for j in inf_cols:
-            v = clean[row, j]
-            if not np.isnan(v) and v > 0:
-                inf_vals.append(337.5 / v)  # radius to diopters
-        for j in sup_cols:
-            v = clean[row, j]
-            if not np.isnan(v) and v > 0:
-                sup_vals.append(337.5 / v)
+    for rows in (preferred_rows, fallback_rows):
+        inf_vals = []
+        sup_vals = []
+        for row in rows:
+            if row >= n_rows:
+                continue
+            for j in inf_cols:
+                v = clean[row, j]
+                if not np.isnan(v) and v > 0:
+                    inf_vals.append(337.5 / v)  # radius to diopters
+            for j in sup_cols:
+                v = clean[row, j]
+                if not np.isnan(v) and v > 0:
+                    sup_vals.append(337.5 / v)
 
-    if len(inf_vals) < 20 or len(sup_vals) < 20:
-        return None
+        if len(inf_vals) >= 20 and len(sup_vals) >= 20:
+            return float(np.mean(inf_vals) - np.mean(sup_vals))
 
-    return float(np.mean(inf_vals) - np.mean(sup_vals))
+    return None
 
 
 def _compute_artmax(thk_map, thk_min_x, thk_min_y):
@@ -6038,15 +6165,21 @@ def _compute_artmax(thk_map, thk_min_x, thk_min_y):
     if ctsp is None:
         return None, None
 
+    # Use ctsp[0] as the baseline.  If ctsp[0] is NaN (holes at the
+    # cone center in severe KC), use thk_min_val as a close approximation
+    # -- the CTSP center IS the thinnest point, so this is the best
+    # substitute we have.
+    baseline = ctsp[0] if not np.isnan(ctsp[0]) else thk_min_val
+
     # Compute PPI for each ring
     max_ppi = 0.0
     for i in range(1, len(ctsp)):
         r_mm = i * _R_STEP_MM
         if r_mm > 3.0:
             break
-        if np.isnan(ctsp[i]) or np.isnan(ctsp[0]):
+        if np.isnan(ctsp[i]):
             continue  # CSO skips NaN rings
-        ppi = (ctsp[i] - ctsp[0]) / r_mm  # µm per mm
+        ppi = (ctsp[i] - baseline) / r_mm  # µm per mm
         if ppi > max_ppi:
             max_ppi = ppi
 
@@ -6146,32 +6279,38 @@ def _compute_srax(sag_ant_map):
     """
     clean = sag_ant_map.astype(np.float64)
     clean[clean == _MISSING] = np.nan
+    n_rows_map = clean.shape[0]
     n_cols = clean.shape[1]
 
-    # Use rings at r ~ 1.5 mm (3 mm diameter): rows 7-8 (1.4-1.6 mm)
-    rows = [7, 8]
-
-    # Build a meridional curvature profile in diopters at the 3 mm zone
-    profile = np.full(n_cols, np.nan, dtype=np.float64)
-    for j in range(n_cols):
-        vals = []
-        for row in rows:
-            if row < clean.shape[0]:
-                v = clean[row, j]
-                if not np.isnan(v) and v > 0:
-                    vals.append(337.5 / v)  # radius to diopters
-        if vals:
-            profile[j] = np.mean(vals)
+    # Use rings at r ~ 1.5 mm (3 mm diameter).  Preferred rows 7-8
+    # (1.4-1.6 mm), fall back to [6..10] for severe KC with missing rings.
+    preferred_rows = [7, 8]
+    fallback_rows = [r for r in range(6, 11) if r < n_rows_map]
 
     # Superior hemicircle: 45-135 deg TABO = columns 32-96
     sup_cols = np.arange(32, 96)
     # Inferior hemicircle: 225-315 deg TABO = columns 160-224
     inf_cols = np.arange(160, 224)
 
-    sup_valid = profile[sup_cols]
-    inf_valid = profile[inf_cols]
+    for rows in (preferred_rows, fallback_rows):
+        # Build a meridional curvature profile in diopters at the 3 mm zone
+        profile = np.full(n_cols, np.nan, dtype=np.float64)
+        for j in range(n_cols):
+            vals = []
+            for row in rows:
+                if row < n_rows_map:
+                    v = clean[row, j]
+                    if not np.isnan(v) and v > 0:
+                        vals.append(337.5 / v)  # radius to diopters
+            if vals:
+                profile[j] = np.mean(vals)
 
-    if np.sum(~np.isnan(sup_valid)) < 10 or np.sum(~np.isnan(inf_valid)) < 10:
+        sup_valid = profile[sup_cols]
+        inf_valid = profile[inf_cols]
+
+        if np.sum(~np.isnan(sup_valid)) >= 10 and np.sum(~np.isnan(inf_valid)) >= 10:
+            break
+    else:
         return None
 
     # Find steepest meridian in each hemicircle (highest diopter value)
@@ -6238,21 +6377,26 @@ def _compute_kisa_pct(sag_ant_map):
     clean[clean == _MISSING] = np.nan
     n_rows, n_cols = clean.shape
 
-    # Build the SimK radial band profile (r in [1.25, 2.05] mm)
-    profile_sum = np.zeros(n_cols, dtype=np.float64)
-    profile_cnt = np.zeros(n_cols, dtype=np.int64)
-    for i in range(1, n_rows):
-        r = i * _R_STEP_MM
-        if r < 1.25 or r > 2.05:
-            continue
-        for j in range(n_cols):
-            val = clean[i, j]
-            if not np.isnan(val):
-                profile_sum[j] += val
-                profile_cnt[j] += 1
+    # Build the SimK radial band profile.  Preferred band [1.25, 2.05] mm,
+    # fallback to wider [1.0, 2.5] mm for severe KC with missing rings.
+    valid = None
+    for r_lo, r_hi in ((1.25, 2.05), (1.0, 2.5)):
+        profile_sum = np.zeros(n_cols, dtype=np.float64)
+        profile_cnt = np.zeros(n_cols, dtype=np.int64)
+        for i in range(1, n_rows):
+            r = i * _R_STEP_MM
+            if r < r_lo or r > r_hi:
+                continue
+            for j in range(n_cols):
+                val = clean[i, j]
+                if not np.isnan(val):
+                    profile_sum[j] += val
+                    profile_cnt[j] += 1
 
-    valid = profile_cnt > 0
-    if np.sum(valid) < 128:  # need at least half the meridians
+        valid = profile_cnt > 0
+        if np.sum(valid) >= 128:  # need at least half the meridians
+            break
+    else:
         return None, srax
 
     profile = np.full(n_cols, np.nan, dtype=np.float64)
@@ -6338,8 +6482,11 @@ def _elevation_bfs_deviation(elev_map, sample_r_mm, sample_theta_rad, fitting_ra
         return None
     bfs_R = float(np.sum((h2 + z2) * z_centered) / denom)
 
-    # Sanity: R should be in physiological range (3.0-20.0 mm)
-    if bfs_R < 3.0 or bfs_R > 20.0:
+    # Sanity: R should be in physiological range.  Normal cornea is
+    # 7-9 mm; severe KC can have BFS R as low as ~3 mm (Kmax 112D);
+    # very flat post-refractive corneas can reach ~12 mm.  Use a wide
+    # range to avoid rejecting pathological but valid eyes.
+    if bfs_R < 2.0 or bfs_R > 25.0:
         return None
 
     # Sample raw elevation at the target location
@@ -6416,14 +6563,16 @@ def _compute_bad_d_components(raw_segments, metadata):
     clean_thk = _clean_polar_map(thk_map)
     ctsp = _compute_ctsp(clean_thk, thk_min_x, thk_min_y)
     if ctsp is not None:
+        # Use ctsp[0] if valid, otherwise thk_min_val (same fallback as ARTmax)
+        baseline = ctsp[0] if not np.isnan(ctsp[0]) else float(thk_min_val)
         max_ppi = 0.0
         for i in range(1, len(ctsp)):
             r_mm = i * _R_STEP_MM
             if r_mm > 3.0:
                 break
-            if np.isnan(ctsp[i]) or np.isnan(ctsp[0]):
+            if np.isnan(ctsp[i]):
                 continue  # CSO skips NaN rings
-            ppi = (ctsp[i] - ctsp[0]) / r_mm  # um per mm
+            ppi = (ctsp[i] - baseline) / r_mm  # um per mm
             if ppi > max_ppi:
                 max_ppi = ppi
         if max_ppi > 0:

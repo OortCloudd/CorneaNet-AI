@@ -1474,11 +1474,19 @@ class TestKCMorphology:
         )
         assert out["kc_morphology_type"] == 0  # NippleCentral
 
-    def test_compute_kc_classification_no_inputs(self, parsed):
-        """Returns Unknown when required inputs are missing."""
+    def test_compute_kc_classification_auto_computes(self, parsed):
+        """Auto-computes prerequisites and returns valid classification."""
         raw, meta = parsed
         out = compute_kc_classification(raw, meta)
-        assert out["kc_morphology_type"] == -1
+        assert out["kc_morphology_type"] in range(6)
+        assert out["kc_morphology_name"] in (
+            "NippleCentral",
+            "NippleParacentral",
+            "BowTie",
+            "SnowMan",
+            "Croissant",
+            "Duck",
+        )
 
 
 # ── Shape Normative Limits ──────────────────────────────────────────
