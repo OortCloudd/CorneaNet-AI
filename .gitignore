@@ -1,0 +1,98 @@
+# ==========================================================================
+# DATA — Never commit patient data, even anonymized
+# ==========================================================================
+*.csv
+*.h5
+*.hdf5
+*.npz
+*.npy
+
+# Pipeline outputs
+output_nn/
+output_visual/
+test_nn*/
+test_visual*/
+
+# Legacy scripts (kept locally for reference, not tracked)
+legacy/
+
+# Internal modules — useful but not public yet
+src/corneaforge/dat_reader.py
+
+# ==========================================================================
+# Python
+# ==========================================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# ==========================================================================
+# IDE / OS
+# ==========================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ==========================================================================
+# Decompiled archives & SSOT docs — sensitive IP, never commit
+# ==========================================================================
+docs/decompiled_archives/
+docs/*.pdf
+docs/*.html
+docs/ann_weights/
+docs/arcstep_ghidra_raw.c
+docs/build_ssot_v6.sh
+
+# Claude Code workspace
+.claude/
+
+# Misc artifacts
+*.bak
+maps_output/
+reference_comparison.png
+
+# Validation data with patient references — never commit
+tests/validation_reference_global.py
+tests/validation_computed_*.json
+tests/validation_*_report.txt
+tests/run_validation_*.py
+tests/run_comparison.py
+tests/validate_*.py
+tests/opd_approach_*.py
+tests/opd_formula_variations.py
+tests/test_ray_trace_approaches.py
+tests/error_analysis*.py
+
+# SSOT mega-doc contains decompiled references
+docs/CSO_MS39_Knowledge_Base_v6.0_SSOT.md
+
+# Formula docs reference decompiled code — keep private
+docs/formulas_*.md
+docs/chapter_*.md  
+docs/v4_coverage_audit.md
+docs/parse_ann_weights.py
+docs/style.css
+docs/design_bad_d_ms39.md
+docs/formulas_screening_indices.md
+docs/formulas_shape_indices.md
+docs/formulas_classification.md
+docs/chapter_altimetric_decomposition.md
+docs/chapter_best_fit_surfaces.md
+docs/chapter_cornealwf_raytracing.md
+docs/chapter_cct_dll_catalog.md
+docs/design_multiethnic_pti.md
+docs/design_ray_tracing_opd.md
+docs/design_biconic_fit.md

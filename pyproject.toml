@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "corneaforge"
+version = "0.1.0"
+description = "Corneal topography processing for deep learning and clinical visualization"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "OortCloudd"},
+]
+
+# --- Dependencies ---
+# These are the packages needed to run the pipelines.
+#
+# WHY EACH DEPENDENCY EXISTS:
+#   numpy        — all array operations, the foundation of everything
+#   scipy        — Delaunay triangulation for interpolation weight cache,
+#                  griddata fallback for segments with NaN gaps
+#   matplotlib   — only matplotlib.colors for BoundaryNorm + ListedColormap
+#                  (we do NOT use pyplot — rendering is done via Pillow)
+#   pandas       — Excel/CSV output in descriptive_stats pipeline
+#   openpyxl     — Excel .xlsx write support for pandas
+#   Pillow       — PNG rendering for visual pipeline
+#
+# All dependencies pinned to current stable versions (2025-2026).
+# numpy 1.x is EOL — all deps now support numpy 2.x.
+dependencies = [
+    "numpy>=2.2",
+    "scipy>=1.15",
+    "matplotlib>=3.10",
+    "pandas>=2.2",
+    "openpyxl>=3.1",
+    "Pillow>=10.0",
+]
+
+# Optional dependencies for development (linting, testing, etc.)
+# Install with: uv sync --extra dev
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+    "httpx>=0.28",
+]
+server = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "python-multipart>=0.0.18",
+]
+
+# Console scripts (available after `uv sync`)
+[project.scripts]
+corneaforge-nn = "corneaforge.nn_pipeline:main"
+corneaforge-visual = "corneaforge.visual_pipeline:main"
+corneaforge-stats = "corneaforge.descriptive_stats:main"
+corneaforge-server = "corneaforge.server:main"
+
+# --- Tooling config ---
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ruff: fast Python linter + formatter (replaces flake8, isort, black)
+# WHY RUFF:
+# It's a single tool that does linting AND formatting, written in Rust,
+# so it runs in milliseconds even on large codebases. One config, one tool.
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (unused imports, undefined names)
+    "I",    # isort (import ordering)
+    "UP",   # pyupgrade (modern Python syntax)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

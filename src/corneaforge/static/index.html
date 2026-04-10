@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CorneaForge</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f8f9fa;
+            color: #1a1a2e;
+            line-height: 1.5;
+        }
+
+        header {
+            background: #fff;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: -0.3px;
+        }
+
+        nav { display: flex; gap: 4px; }
+
+        nav button {
+            padding: 8px 20px;
+            border: 1px solid #d0d0d0;
+            background: #fff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #444;
+            transition: all 0.15s;
+        }
+
+        nav button:hover { background: #f0f0f0; }
+        nav button.active { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+
+        main { max-width: 960px; margin: 32px auto; padding: 0 24px; }
+
+        .card {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 28px;
+            margin-bottom: 20px;
+        }
+
+        .card h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .card p.subtitle {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        /* File upload zones */
+        .upload-zone {
+            border: 2px dashed #d0d0d0;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.15s;
+            margin-bottom: 12px;
+        }
+
+        .upload-zone:hover { border-color: #888; background: #fafafa; }
+        .upload-zone.has-file { border-color: #2e7d32; background: #f1f8e9; }
+        .upload-zone.has-file .zone-label { color: #2e7d32; }
+
+        .zone-label {
+            font-size: 13px;
+            color: #888;
+        }
+
+        .zone-filename {
+            font-size: 12px;
+            color: #2e7d32;
+            margin-top: 4px;
+            font-weight: 500;
+        }
+
+        input[type="file"] { display: none; }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 28px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .btn-primary {
+            background: #1a1a2e;
+            color: #fff;
+        }
+
+        .btn-primary:hover { background: #2a2a4e; }
+        .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+
+        .btn-secondary {
+            background: #fff;
+            color: #1a1a2e;
+            border: 1px solid #d0d0d0;
+        }
+
+        .btn-secondary:hover { background: #f5f5f5; }
+
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        /* Result display */
+        .result { display: none; }
+        .result.visible { display: block; }
+
+        .prediction-box {
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 16px;
+        }
+
+        .prediction-box.no-model {
+            background: #fff3e0;
+            border: 1px solid #ffcc80;
+        }
+
+        .prediction-box.ok {
+            background: #e8f5e9;
+            border: 1px solid #a5d6a7;
+        }
+
+        .prediction-box.error {
+            background: #ffebee;
+            border: 1px solid #ef9a9a;
+        }
+
+        .prediction-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .prediction-value {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .warnings {
+            font-size: 12px;
+            color: #795548;
+            background: #fff8e1;
+            border: 1px solid #ffe082;
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+        }
+
+        .warnings ul { margin-left: 16px; }
+
+        /* Maps grid */
+        .maps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .map-card {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .map-card img {
+            width: 100%;
+            display: block;
+        }
+
+        .map-card .map-name {
+            padding: 8px 12px;
+            font-size: 12px;
+            color: #555;
+            border-top: 1px solid #eee;
+        }
+
+        /* Research section */
+        .research-upload {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .research-upload .file-count {
+            font-size: 13px;
+            color: #666;
+        }
+
+        /* Progress bar */
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .progress-container.active { display: block; }
+
+        .progress-bar-bg {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: #1a1a2e;
+            border-radius: 4px;
+            transition: width 0.3s;
+            width: 0%;
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+            margin-top: 6px;
+        }
+
+        /* Loading spinner */
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ddd;
+            border-top: 2px solid #1a1a2e;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-left: 8px;
+        }
+
+        .spinner.active { display: inline-block; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Section visibility */
+        .section { display: none; }
+        .section.active { display: block; }
+
+        /* Status bar */
+        .status-bar {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+            padding: 8px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>CorneaForge</h1>
+        <nav>
+            <button class="active" onclick="showSection('prediction')">Prediction</button>
+            <button onclick="showSection('research')">Research</button>
+        </nav>
+    </header>
+
+    <main>
+        <!-- ── Prediction Section ── -->
+        <div id="section-prediction" class="section active">
+            <div class="card">
+                <h2>Disease Classification</h2>
+                <p class="subtitle">Upload MS-39 individual CSV + enter Corvis ST values</p>
+
+                <div class="upload-zone" onclick="document.getElementById('file-ms39-ind').click()">
+                    <div class="zone-label">MS-39 Individual (required)</div>
+                    <div class="zone-filename" id="name-ms39-ind"></div>
+                    <input type="file" id="file-ms39-ind" accept=".csv" onchange="onFileSelect(this, 'name-ms39-ind')">
+                </div>
+
+                <details style="margin-bottom:12px;">
+                    <summary style="cursor:pointer; font-size:13px; color:#666;">Corvis ST values (optional)</summary>
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:8px;" id="corvis-fields">
+                        <label style="font-size:12px;">IOP (mmHg)<input type="number" step="any" name="iop" style="width:100%;"></label>
+                        <label style="font-size:12px;">bIOP (mmHg)<input type="number" step="any" name="biop" style="width:100%;"></label>
+                        <label style="font-size:12px;">CCT (um)<input type="number" step="any" name="cct" style="width:100%;"></label>
+                        <label style="font-size:12px;">DA max (mm)<input type="number" step="any" name="da_max" style="width:100%;"></label>
+                        <label style="font-size:12px;">DA Ratio 1mm<input type="number" step="any" name="da_ratio_1mm" style="width:100%;"></label>
+                        <label style="font-size:12px;">DA Ratio 2mm<input type="number" step="any" name="da_ratio_2mm" style="width:100%;"></label>
+                        <label style="font-size:12px;">SP-A1<input type="number" step="any" name="sp_a1" style="width:100%;"></label>
+                        <label style="font-size:12px;">ARTh<input type="number" step="any" name="arth" style="width:100%;"></label>
+                        <label style="font-size:12px;">CBI<input type="number" step="any" name="cbi" style="width:100%;"></label>
+                        <label style="font-size:12px;">Integ. Radius (mm)<input type="number" step="any" name="integrated_radius" style="width:100%;"></label>
+                        <label style="font-size:12px;">A1 Time (ms)<input type="number" step="any" name="a1_time" style="width:100%;"></label>
+                        <label style="font-size:12px;">A1 Velocity (m/s)<input type="number" step="any" name="a1_velocity" style="width:100%;"></label>
+                        <label style="font-size:12px;">A2 Time (ms)<input type="number" step="any" name="a2_time" style="width:100%;"></label>
+                        <label style="font-size:12px;">A2 Velocity (m/s)<input type="number" step="any" name="a2_velocity" style="width:100%;"></label>
+                        <label style="font-size:12px;">Peak Dist (mm)<input type="number" step="any" name="peak_distance" style="width:100%;"></label>
+                    </div>
+                </details>
+
+                <div class="btn-row">
+                    <button class="btn btn-primary" id="btn-predict" onclick="runPrediction()">Predict</button>
+                    <div class="spinner" id="spinner-predict"></div>
+                </div>
+            </div>
+
+            <div class="result" id="prediction-result">
+                <div class="prediction-box" id="prediction-box">
+                    <div class="prediction-label">Prediction</div>
+                    <div class="prediction-value" id="prediction-value"></div>
+                    <div id="prediction-eye" style="font-size:13px; color:#666; margin-top:4px;"></div>
+                </div>
+
+                <div class="warnings" id="prediction-warnings" style="display:none;">
+                    <strong>Warnings</strong>
+                    <ul id="warnings-list"></ul>
+                </div>
+
+                <div id="maps-container">
+                    <h2 style="font-size:14px; margin-bottom:8px;">Corneal Maps</h2>
+                    <div class="maps-grid" id="maps-grid"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Research Section ── -->
+        <div id="section-research" class="section">
+            <div class="card">
+                <h2>Batch Processing</h2>
+                <p class="subtitle">Upload MS-39 CSV files and download processed results</p>
+
+                <div class="research-upload">
+                    <button class="btn btn-secondary" onclick="document.getElementById('file-research').click()">
+                        Select folder
+                    </button>
+                    <span class="file-count" id="research-file-count">No folder selected</span>
+                    <input type="file" id="file-research" webkitdirectory multiple onchange="onResearchFiles(this)">
+                </div>
+
+                <div class="btn-row" id="research-buttons">
+                    <button class="btn btn-primary" onclick="startResearch('stats')">
+                        Download Stats (.csv)
+                    </button>
+                    <button class="btn btn-primary" onclick="startResearch('tensors')">
+                        Download Tensors (.zip)
+                    </button>
+                    <button class="btn btn-primary" onclick="startResearch('maps')">
+                        Download Maps (.zip)
+                    </button>
+                </div>
+
+                <div class="progress-container" id="research-progress">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="progress-text">0 / 0 files</span>
+                        <span id="progress-eta"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="status-bar">CorneaForge v0.2.1 &mdash; Nassim Louissi</div>
+
+    <script>
+        // ── Navigation ──
+
+        function showSection(name) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.getElementById('section-' + name).classList.add('active');
+            document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+        }
+
+        // ── File selection ──
+
+        function onFileSelect(input, labelId) {
+            const zone = input.closest('.upload-zone');
+            const label = document.getElementById(labelId);
+            if (input.files.length > 0) {
+                label.textContent = input.files[0].name;
+                zone.classList.add('has-file');
+            } else {
+                label.textContent = '';
+                zone.classList.remove('has-file');
+            }
+        }
+
+        function onResearchFiles(input) {
+            // Filter to only .csv files from the folder
+            const csvFiles = Array.from(input.files).filter(f => f.name.toLowerCase().endsWith('.csv'));
+            // Store filtered list for later use
+            input._csvFiles = csvFiles;
+            const count = csvFiles.length;
+            document.getElementById('research-file-count').textContent =
+                count === 0 ? 'No CSV files found in folder' : count + ' CSV file(s) found';
+        }
+
+        // ── Prediction ──
+
+        async function runPrediction() {
+            const ms39Ind = document.getElementById('file-ms39-ind').files[0];
+            if (!ms39Ind) {
+                alert('Please select an MS-39 Individual file.');
+                return;
+            }
+
+            const form = new FormData();
+            form.append('ms39_individual', ms39Ind);
+
+            // Collect Corvis fields into JSON (only non-empty values)
+            const corvisData = {};
+            let hasCorvis = false;
+            document.querySelectorAll('#corvis-fields input').forEach(inp => {
+                if (inp.value !== '') {
+                    corvisData[inp.name] = parseFloat(inp.value);
+                    hasCorvis = true;
+                }
+            });
+            if (hasCorvis) form.append('corvis', JSON.stringify(corvisData));
+
+            document.getElementById('btn-predict').disabled = true;
+            document.getElementById('spinner-predict').classList.add('active');
+            document.getElementById('prediction-result').classList.remove('visible');
+
+            try {
+                const res = await fetch('/predict/disease_classification', { method: 'POST', body: form });
+                const data = await res.json();
+                showPredictionResult(data);
+            } catch (err) {
+                showPredictionResult({ status: 'error', prediction: null, warnings: ['Network error: ' + err.message] });
+            } finally {
+                document.getElementById('btn-predict').disabled = false;
+                document.getElementById('spinner-predict').classList.remove('active');
+            }
+        }
+
+        function showPredictionResult(data) {
+            const result = document.getElementById('prediction-result');
+            const box = document.getElementById('prediction-box');
+            const value = document.getElementById('prediction-value');
+            const eye = document.getElementById('prediction-eye');
+
+            // Status styling
+            box.className = 'prediction-box ' + data.status;
+
+            // Prediction value
+            if (data.status === 'error') {
+                value.textContent = 'Error';
+            } else if (data.status === 'no_model') {
+                value.textContent = 'No model loaded';
+            } else {
+                value.textContent = data.prediction || 'Unknown';
+            }
+
+            // Eye
+            eye.textContent = data.eye ? 'Eye: ' + data.eye : '';
+
+            // Warnings
+            const warningsDiv = document.getElementById('prediction-warnings');
+            const warningsList = document.getElementById('warnings-list');
+            warningsList.innerHTML = '';
+            if (data.warnings && data.warnings.length > 0) {
+                data.warnings.forEach(w => {
+                    const li = document.createElement('li');
+                    li.textContent = w;
+                    warningsList.appendChild(li);
+                });
+                warningsDiv.style.display = 'block';
+            } else {
+                warningsDiv.style.display = 'none';
+            }
+
+            // Maps
+            const grid = document.getElementById('maps-grid');
+            grid.innerHTML = '';
+            if (data.maps && data.maps.length > 0) {
+                data.maps.forEach(name => {
+                    const card = document.createElement('div');
+                    card.className = 'map-card';
+
+                    const img = document.createElement('img');
+                    img.src = '/maps/' + data.prediction_id + '/' + name + '.png';
+                    img.alt = name;
+                    img.loading = 'lazy';
+
+                    const label = document.createElement('div');
+                    label.className = 'map-name';
+                    label.textContent = name.replace(/_/g, ' ');
+
+                    card.appendChild(img);
+                    card.appendChild(label);
+                    grid.appendChild(card);
+                });
+                document.getElementById('maps-container').style.display = 'block';
+            } else {
+                document.getElementById('maps-container').style.display = 'none';
+            }
+
+            result.classList.add('visible');
+        }
+
+        // ── Research downloads ──
+
+        let _pollTimer = null;
+
+        async function startResearch(type) {
+            const input = document.getElementById('file-research');
+            const files = input._csvFiles || Array.from(input.files).filter(f => f.name.toLowerCase().endsWith('.csv'));
+            if (files.length === 0) {
+                alert('Please select a folder containing CSV files.');
+                return;
+            }
+
+            const form = new FormData();
+            for (const file of files) {
+                form.append('files', file);
+            }
+
+            // Disable buttons, show progress
+            const buttons = document.querySelectorAll('#research-buttons button');
+            buttons.forEach(b => b.disabled = true);
+            const progress = document.getElementById('research-progress');
+            progress.classList.add('active');
+            updateProgress(0, files.length, 0);
+
+            try {
+                // Start the job
+                const res = await fetch('/research/start/' + type, { method: 'POST', body: form });
+                if (!res.ok) {
+                    const err = await res.json();
+                    alert('Error: ' + (err.detail || 'Unknown error'));
+                    resetResearchUI();
+                    return;
+                }
+
+                const { job_id } = await res.json();
+
+                // Poll progress
+                _pollTimer = setInterval(async () => {
+                    try {
+                        const pr = await fetch('/research/progress/' + job_id);
+                        const data = await pr.json();
+
+                        updateProgress(data.done, data.total, data.eta);
+
+                        if (data.status === 'done') {
+                            clearInterval(_pollTimer);
+                            _pollTimer = null;
+
+                            // Trigger download
+                            const dl = await fetch('/research/download/' + job_id);
+                            const blob = await dl.blob();
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            const cd = dl.headers.get('Content-Disposition');
+                            a.download = cd ? cd.split('filename=')[1] : type + '.zip';
+                            document.body.appendChild(a);
+                            a.click();
+                            a.remove();
+                            URL.revokeObjectURL(url);
+
+                            resetResearchUI();
+                        }
+                    } catch (err) {
+                        clearInterval(_pollTimer);
+                        alert('Error polling progress: ' + err.message);
+                        resetResearchUI();
+                    }
+                }, 500);
+
+            } catch (err) {
+                alert('Network error: ' + err.message);
+                resetResearchUI();
+            }
+        }
+
+        function updateProgress(done, total, eta) {
+            const pct = total > 0 ? (done / total * 100) : 0;
+            document.getElementById('progress-fill').style.width = pct + '%';
+            document.getElementById('progress-text').textContent = done + ' / ' + total + ' files';
+
+            if (eta > 0) {
+                const min = Math.floor(eta / 60);
+                const sec = eta % 60;
+                document.getElementById('progress-eta').textContent =
+                    min > 0 ? min + 'm ' + sec + 's remaining' : sec + 's remaining';
+            } else if (done > 0 && done >= total) {
+                document.getElementById('progress-eta').textContent = 'Preparing download...';
+            } else {
+                document.getElementById('progress-eta').textContent = 'Estimating...';
+            }
+        }
+
+        function resetResearchUI() {
+            const buttons = document.querySelectorAll('#research-buttons button');
+            buttons.forEach(b => b.disabled = false);
+            // Keep progress visible for a moment so user sees 100%
+            setTimeout(() => {
+                document.getElementById('research-progress').classList.remove('active');
+            }, 2000);
+        }
+    </script>
+</body>
+</html>
