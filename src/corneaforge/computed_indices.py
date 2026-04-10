@@ -1900,13 +1900,19 @@ def _shape_indices_one_surface(elev_map, surface_label):
 
         prefix = f"shape_{d_label}mm_{surface_label}"
 
-        # Select valid points within the analysis zone
+        # Full analysis zone: all valid points within the diameter.
+        # CSO includes row 0 (apex, h=0) in the RMS computation zone.
         in_zone = (h_grid <= hmax) & (~invalid)
-        # Exclude row 0 (h=0): z=0 always, adds no information and can
-        # cause division issues in the normal equations.
-        in_zone[0, :] = False
 
-        n_valid = np.count_nonzero(in_zone)
+        # Fitting zone: exclude row 0 for the torus fit.
+        # At h=0, z=0 always, so row 0 contributes only zeros to the
+        # normal equations and cannot cause division issues.  However,
+        # row 0 IS included in the RMS zone (see below) because CSO's
+        # GetRMS iterates over all rows where ro <= Rmax.
+        in_zone_fit = in_zone.copy()
+        in_zone_fit[0, :] = False
+
+        n_valid = np.count_nonzero(in_zone_fit)
 
         if n_valid < _MIN_POINTS_FOR_FIT:
             results[f"{prefix}_fitting_diameter"] = None
@@ -1917,9 +1923,9 @@ def _shape_indices_one_surface(elev_map, surface_label):
             results[f"{prefix}_rms"] = None
             continue
 
-        h_valid = h_grid[in_zone]
-        z_valid = z_grid[in_zone]
-        theta_valid = theta_grid[in_zone]
+        h_valid = h_grid[in_zone_fit]
+        z_valid = z_grid[in_zone_fit]
+        theta_valid = theta_grid[in_zone_fit]
 
         # Remove surface tilt before torus fitting (matches CSO preprocessing)
         z_valid = _remove_tilt(h_valid, z_valid, theta_valid)
@@ -1948,10 +1954,16 @@ def _shape_indices_one_surface(elev_map, surface_label):
 
         # RMS of Gaussian-smoothed residuals against the torus model (um).
         # CSO applies sigma=2 smoothing to BFS residuals before computing
-        # RMS (chapter_best_fit_surfaces.md Section 11.2).  We put the tilt-corrected heights back
-        # into a 2D grid so the Gaussian kernel works in polar-pixel space.
+        # RMS (chapter_best_fit_surfaces.md Section 11.2).  We put the
+        # tilt-corrected heights back into a 2D grid so the Gaussian
+        # kernel works in polar-pixel space.
+        #
+        # Use the FULL zone (in_zone, including row 0) for RMS, matching
+        # CSO's GetRMS which checks ro <= Rmax (includes row 0 at ro=0).
+        # Row 0 has z=0 and z_model=0, so its residual is 0.  Including
+        # it matches CSO's point count and slightly reduces the RMS.
         z_grid_tc = z_grid.copy()
-        z_grid_tc[in_zone] = z_valid  # tilt-corrected heights
+        z_grid_tc[in_zone_fit] = z_valid  # tilt-corrected heights
         z_grid_tc[~in_zone] = np.nan  # mark out-of-zone as NaN
         rms = _compute_rms_smoothed(z_grid_tc, h_grid, theta_grid, in_zone, R_mean, p, dR, alpha)
 
@@ -2666,10 +2678,13 @@ def _compute_pepiti(epi_map, thk_min_x, thk_min_y):
     """
     clean = _clean_polar_map(epi_map)
 
-    # Find epithelial minimum -- use global minimum as fallback
-    # (the full algorithm searches near NotablePtsBarycenter, which
-    # requires DZMax values we cannot compute without Zernike)
-    epi_min_val, epi_min_x, epi_min_y = _find_extremum(epi_map, mode="min")
+    # Find epithelial minimum with Limit=3.0 mm (CSO's GetEpiMin uses
+    # ro[i+1] < 3.0).  Without this cap, peripheral OCT artifacts (e.g.
+    # epithelial thinning at r > 3 mm in OS eyes) are picked up, placing
+    # the minimum far from the cone and zeroing the location-dependent weight.
+    # The full algorithm also restricts the search to a 2.0 mm radius around
+    # NotablePtsBarycenter, but we lack DZMax so we skip that constraint.
+    epi_min_val, epi_min_x, epi_min_y = _find_extremum(epi_map, mode="min", max_radius=3.0)
     if epi_min_val is None:
         return None
 
