@@ -8,7 +8,7 @@ for the global export (which is slow, recalculates on-the-fly, and
 exports all patients instead of one).
 
 All indices are computed from the polar maps in the ms39_individual CSV
-using the algorithm documented in the SSOT (formulas_summary_indices.md):
+using the algorithm documented in formulas_summary_indices.md:
 
   For each valid cell (r, theta) where map[r, theta] != -1000:
       x = r_mm * cos(theta_rad)
@@ -385,8 +385,7 @@ def _find_extremum(polar_map, mode="min", max_radius=None):
     """
     Find a local min or max of a polar map and its Cartesian location.
 
-    Matches CSO ``CommonCornealTopography.Utils.GetMin`` / ``GetMax``
-    (decompiled line 29485).  A candidate cell must be a strict local
+    Matches CSO ``GetMin`` / ``GetMax``.  A candidate cell must be a strict local
     extremum: less than (min) or greater than (max) all four cardinal
     neighbours in the polar grid.  Additionally, the cell and its
     surrounding 5x5 block must be hole-free (``CheckPoint``).
@@ -518,7 +517,7 @@ def _corneal_volume(polar_map, elev_ant_map=None):
     """
     Compute corneal volume by integrating the thickness map in polar coords.
 
-    CSO's actual algorithm (decompiled SummaryIndicesObj private method ``a``)
+    CSO's actual algorithm
     integrates the *difference* between posterior and anterior Z-surface
     elevation maps using a cell-by-cell 4-corner average over each annular
     cell.  The CSV exports perpendicular thickness, NOT the axial
@@ -689,7 +688,7 @@ def compute_summary_indices(raw_segments: dict) -> dict:
         out["kmax_back_y"] = None
 
     # 4. EpiThkMin — minimum epithelial thickness
-    #    CSO applies a 3.9mm radius cutoff (decompiled SummaryIndicesObj line 257):
+    #    CSO applies a 3.9mm radius cutoff:
     #    m_EpiThkMin = Utils.GetMin(radii, epiMap, epiMask, 3.9f)
     #    CSO also uses an internal OCT validity mask (bool[,] j()) that filters
     #    unreliable peripheral epithelial segmentations.  This mask is NOT
@@ -707,7 +706,7 @@ def compute_summary_indices(raw_segments: dict) -> dict:
         out["epi_thk_min_y"] = None
 
     # 5. EpiThkMax — maximum epithelial thickness
-    #    Same 3.9mm radius cutoff as EpiThkMin (decompiled line 258):
+    #    Same 3.9mm radius cutoff as EpiThkMin:
     #    m_EpiThkMax = Utils.GetMax(radii, epiMap, epiMask, 3.9f)
     if epi_map is not None:
         val, x, y = _find_extremum(epi_map, mode="max", max_radius=3.9)
@@ -1064,13 +1063,13 @@ def compute_epithelial_sectors(raw_segments: dict, metadata: dict) -> dict:
 # the optical contribution of the epithelium via Zernike decomposition at
 # two apertures (3mm and 6mm diameter).
 #
-# Pipeline (matches CSO EpithelialThicknessObj decompiled):
+# Pipeline (matches CSO EpithelialThicknessObj):
 #   1. Convert epithelial thickness polar map to mm, extract Cartesian coords
 #   2. Fit Zernike directly to the thickness map (no BFS subtraction --
 #      the epithelial map is a flat thickness field, not a curved surface)
 #   3. Convert geometric Zernike coefficients to OPD via delta_n = -0.401
 #   4. Derive refraction (M, J0, J45, Sph, Cyl, CylAx) from low-order OPD
-#      using NEGATIVE multipliers (Thibos 2002, matches decompiled CSO)
+#      using NEGATIVE multipliers (Thibos 2002, matches CSO)
 #   5. Apply vertex distance correction (12.5mm, cornea->spectacle)
 #   6. Compute EpiRMSonA = HOA_RMS / (pi * R^2)
 #
@@ -1079,13 +1078,13 @@ def compute_epithelial_sectors(raw_segments: dict, metadata: dict) -> dict:
 #
 # NOTE: CSO applies -0.401 * thickness BEFORE Zernike fitting; we apply
 # delta_n AFTER fitting (mathematically equivalent since Zernike fitting
-# is linear).  Uses NEGATIVE multipliers (Thibos 2002, matches decompiled CSO).
+# is linear).  Uses NEGATIVE multipliers (Thibos 2002, matches CSO).
 # Remaining error (~5-13% on refraction) is due to pupil-center offset:
 # CSO subtracts pupil center from polar coords before fitting.
 # ==========================================================================
 
 # Epithelial refractive indices
-_EPI_DELTA_N = -0.401  # -(n_epithelium - n_air) = -(1.401 - 1.0), matches CSO decompiled
+_EPI_DELTA_N = -0.401  # -(n_epithelium - n_air) = -(1.401 - 1.0), matches CSO
 _EPI_VD_MM = 12.5  # standard vertex distance (mm), matches CSO Settings.Default.RxVD
 _EPI_VD_M = _EPI_VD_MM / 1000.0  # vertex distance in meters
 
@@ -1102,7 +1101,7 @@ def _epirx_from_zernike(opd_coeffs_um, fitting_radius_mm):
 
     Implements CSO's ObjRx.FromZernike power-vector decomposition plus
     vertex distance correction.  Uses NEGATIVE multipliers
-    (Thibos 2002, matches decompiled CSO).
+    (Thibos 2002, matches CSO).
 
     Parameters
     ----------
@@ -1344,7 +1343,7 @@ def compute_epithelial_refraction(raw_segments, metadata):
 # global CSV export under "Shape Indices".  Each column describes a
 # conic-section fit of the corneal surface at a given analysis diameter.
 #
-# Algorithm (matches decompiled CSO Common.dll -- see formulas_shape_indices.md):
+# Algorithm (matches CSO -- see formulas_shape_indices.md):
 #
 #   1.  Convert the sagittal-radius polar map R_sag(h, theta) to surface
 #       heights z using z = R_sag - sqrt(R_sag^2 - h^2).  This is exact
@@ -1467,9 +1466,9 @@ def _fit_torus_4param(h_valid, z_valid, theta_valid):
 
     The alpha extraction uses ``atan2(x[3], x[2]) / 2`` because x[2]
     and x[3] encode ``2*dR*cos(2*alpha)`` and ``2*dR*sin(2*alpha)``
-    respectively.  CSO's decompiled code has ``-atan2(x[3], x[2])``
+    respectively.  CSO uses ``-atan2(x[3], x[2])``
     (without /2) but post-processes via ``CylAx = (360 - 90*alpha/pi)
-    % 180`` (SSOT Section 10.4), which is equivalent to dividing by 2.
+    % 180`` (formulas_shape_indices.md Section 10.4), which is equivalent to dividing by 2.
 
     Parameters
     ----------
@@ -1568,7 +1567,7 @@ def _compute_rms(h2, z_valid, theta_valid, R_mean, p, dR, alpha):
 
 # Gaussian smoothing sigma for BFS residuals (in meridian-sample units).
 # CSO applies sigma=2 circular Gaussian smoothing per ring before RMS
-# (SSOT chapter_best_fit_surfaces.md Sections 10 and 11.2).
+# (chapter_best_fit_surfaces.md Sections 10 and 11.2).
 _SHAPE_SMOOTH_SIGMA = 2.0
 
 
@@ -1576,7 +1575,7 @@ def _circular_gauss_smooth_ring(ring, valid_mask, sigma):
     """
     Circular Gaussian smoothing of one ring, matching CSO CircularFilter.
 
-    Steps (from decompiled Utils.CircularFilter):
+    Steps (matching CSO CircularFilter):
       1. Fill holes (NaN/invalid) via nearest-neighbour interpolation
       2. Build 1D Gaussian kernel (width = ceil(3*sigma)*2 + 1)
       3. Circular convolution (wrap at 0/255)
@@ -1949,7 +1948,7 @@ def _shape_indices_one_surface(elev_map, surface_label):
 
         # RMS of Gaussian-smoothed residuals against the torus model (um).
         # CSO applies sigma=2 smoothing to BFS residuals before computing
-        # RMS (SSOT Section 11.2).  We put the tilt-corrected heights back
+        # RMS (chapter_best_fit_surfaces.md Section 11.2).  We put the tilt-corrected heights back
         # into a 2D grid so the Gaussian kernel works in polar-pixel space.
         z_grid_tc = z_grid.copy()
         z_grid_tc[in_zone] = z_valid  # tilt-corrected heights
@@ -1981,7 +1980,7 @@ def compute_shape_indices(raw_segments: dict) -> dict:
       - FittingDiameter: actual diameter used for fitting (mm)
       - RMS:             root mean square of fit residuals (um)
 
-    The fitting algorithm is a direct port of the decompiled CSO Common.dll
+    The fitting algorithm matches CSO's
     GetBestFitTorus (4-parameter variant).  See formulas_shape_indices.md
     Sections 3.3 and 10.4 for the derivation and correction notes.
 
@@ -2047,7 +2046,7 @@ def compute_shape_indices(raw_segments: dict) -> dict:
         out.update(_shape_indices_one_surface(z_post, "post"))
 
     # --- Shape normative limits (P95 / P99) ---
-    # Source: CommonCornealTopography.decompiled.cs lines 30133-30159
+    # Quadratic normative RMS limits (population-derived thresholds).
     #         (ShapeIndicesModuleT.Get95Limit / Get99Limit).
     #
     # Quadratic RMS limits as a function of fitting diameter Phi (mm):
@@ -2081,8 +2080,7 @@ def shape_rms_normative_p95(phi_mm, anterior=True):
     """
     Compute the P95 normative RMS limit for shape indices at a given diameter.
 
-    Source: CommonCornealTopography.decompiled.cs line 30133-30140
-    (ShapeIndicesModuleT.Get95Limit).
+    Matches CSO ShapeIndicesModuleT.Get95Limit.
 
     Parameters
     ----------
@@ -2105,8 +2103,7 @@ def shape_rms_normative_p99(phi_mm, anterior=True):
     """
     Compute the P99 normative RMS limit for shape indices at a given diameter.
 
-    Source: CommonCornealTopography.decompiled.cs line 30147-30154
-    (ShapeIndicesModuleT.Get99Limit).
+    Matches CSO ShapeIndicesModuleT.Get99Limit.
 
     Parameters
     ----------
@@ -2129,8 +2126,7 @@ def shape_rms_normative_p99(phi_mm, anterior=True):
 # KERATOCONUS SCREENING INDICES
 # ==========================================================================
 #
-# Source: formulas_screening_indices.md (reverse-engineered from
-#         CommonCornealTopography.dll + ASOCT_Topography.exe)
+# Source: formulas_screening_indices.md
 #
 # Indices computable from polar maps alone:
 #   SIf, SIb, CSIf, CSIb, ThkSI, PTI, PEpiTI
@@ -2150,13 +2146,13 @@ _P0_ANGLE_OD = np.radians(241)  # 241 deg -- infero-temporal OD
 _P0_ANGLE_OS = np.radians(299)  # 299 deg -- infero-temporal OS
 _P0_ANGLE_UNSPECIFIED = np.radians(270)  # 270 deg -- straight inferior
 
-# Minimum sample requirement per region (from decompiled code)
+# Minimum sample requirement per region
 _SCREENING_MIN_SAMPLES = 100
 
 # CSIf/CSIb / ThkSI trimming fraction (5% each tail)
 _SCREENING_TRIM_ALPHA = 0.05
 
-# PTI normative percentile arrays (24 rings, from SSOT Section 16)
+# PTI normative percentile arrays (24 rings, from formulas_screening_indices.md Section 16)
 _PTI95 = np.array(
     [
         0,
@@ -2227,7 +2223,7 @@ def _get_p0_angle(exam_eye: str) -> float:
 
 def _polar_to_cart_cso(r, theta):
     """
-    CSO decompiled convention: x = r*sin(theta), y = r*cos(theta).
+    CSO convention: x = r*sin(theta), y = r*cos(theta).
 
     This is the convention used in GetCurvSI / GetThkSI -- note the
     swapped sin/cos compared to standard math convention.
@@ -2511,7 +2507,7 @@ def _compute_ctsp(clean_thk, center_x, center_y, max_radius=3.0):
     Re-centers the thickness map on (center_x, center_y) and averages
     concentric rings.  Returns CTSP array (one value per ring) or None.
 
-    The decompiled code uses:
+    CSO uses:
         x = ro[i] * cos(-2*pi*j/length) + ThkMin.X
         y = ro[i] * sin(-2*pi*j/length) - ThkMin.Y
     then converts back to polar for interpolation.
@@ -2720,9 +2716,7 @@ def _compute_pepiti(epi_map, thk_min_x, thk_min_y):
 # PDThkSI  (Population-Deviation Thickness Symmetry Index)
 # ==========================================================================
 #
-# Source: KeratoconusScreeningObj.cs lines 141-251 (normative Zernike arrays),
-#         lines 522-523 (PDThkSI computation), line 856 (Z-score map builder).
-#         CommonCornealTopography.decompiled.cs line 29170 (GetThkSIn).
+# Normative Zernike arrays for population-deviation thickness Z-scoring.
 #
 # The 6 normative arrays (ThkM, ThkSD, EpiThkM, EpiThkSD, StrThkM, StrThkSD)
 # each contain 36 Zernike coefficients (order 7) that reconstruct the
@@ -2735,8 +2729,7 @@ def _compute_pepiti(epi_map, thk_min_x, thk_min_y):
 #   4. Run GetThkSIn on the Z-scored map (same as ThkSI but with r0=2.0mm)
 # ==========================================================================
 
-# Normative Zernike coefficients (36 terms, order 7) from decompiled
-# KeratoconusScreeningObj.cs lines 141-251.  Used to reconstruct
+# Normative Zernike coefficients (36 terms, order 7).  Used to reconstruct
 # population-average thickness maps for Z-scoring.
 
 _NORM_THK_MEAN = np.array(
@@ -3045,13 +3038,13 @@ def _compute_pdthksi(thk_map, exam_eye, r0=2.0):
     """
     Compute PDThkSI (Population-Deviation Thickness Symmetry Index).
 
-    Algorithm (from decompiled KeratoconusScreeningObj.cs):
+    Algorithm (matches CSO KeratoconusScreening):
       1. Reconstruct normative mean+SD maps from Zernike coefficients.
       2. Z-score: z_map = (thk - mean_norm) / sd_norm
       3. For OS eyes, mirror the normative map: col -> (3*N/2 - col) % N
       4. Apply GetThkSIn on the Z-scored map with r0=2.0mm.
 
-    The GetThkSIn function (line 29170) is identical to GetThkSI but
+    The GetThkSIn function is identical to GetThkSI but
     operates on the Z-scored map and uses a configurable r0.
 
     Parameters
@@ -3076,8 +3069,7 @@ def _compute_pdthksi(thk_map, exam_eye, r0=2.0):
     norm_sd = _reconstruct_normative_map(_NORM_THK_SD, n_rows, n_cols)
 
     # For OS eyes, mirror the normative map: col -> (3*N/2 - col) % N
-    # This matches the decompiled code at line 849:
-    #   int num = (3 * length / 2 - l) % length;
+    # Mirror formula: (3*N/2 - col) % N
     is_os = str(exam_eye).strip().upper() == "OS"
     if is_os:
         mirror_idx = np.array([(3 * n_cols // 2 - j) % n_cols for j in range(n_cols)])
@@ -3131,8 +3123,7 @@ def _compute_pdthksi(thk_map, exam_eye, r0=2.0):
 # KERATOCONUS MORPHOLOGICAL CLASSIFIER
 # ==========================================================================
 #
-# Source: CommonCornealTopography.decompiled.cs lines 12067-12154
-#         (KeratoconusMorphologicalClassifier class).
+# Matches CSO KeratoconusMorphologicalClassifier.
 #
 # Pure rule-based classifier that categorizes keratoconus cone morphology
 # into 6 types based on SimK, asphericity, cone center distance, coma
@@ -3146,8 +3137,7 @@ def classify_kc_morphology(
     """
     Classify keratoconus cone morphology into 6 types.
 
-    Direct port of CSO's KeratoconusMorphologicalClassifier (decompiled
-    CommonCornealTopography.dll lines 12067-12154).
+    Matches CSO's KeratoconusMorphologicalClassifier algorithm.
 
     The 6 types are:
       0 = NippleCentral     -- steep + central cone
@@ -3205,7 +3195,7 @@ def classify_kc_morphology(
         # Cone center distance from apex
         kc_dist_mm = math.sqrt(kc_center_x**2 + kc_center_y**2)
 
-        # KAx: angle of cone center from origin (matches decompiled line 12103)
+        # KAx: angle of cone center from origin
         k_ax = (math.degrees(math.atan2(kc_center_y, kc_center_x)) + 360.0) % 360.0
 
         # Rule 1: Steep + prolate -> Nipple (Central or Paracentral)
@@ -3223,7 +3213,7 @@ def classify_kc_morphology(
 
         # Rule 3: Croissant / SnowMan / Duck based on axis alignment
         # angle_diff = min(|cylAx - KAx|, |cylAx - KAx + 180|)
-        # (matches decompiled line 12116)
+        # (matches CSO axis alignment rule)
         angle_diff = min(abs(cyl_ax - k_ax), abs(cyl_ax - k_ax + 180.0))
         if angle_diff < 30.0:
             return {"kc_morphology_type": 4, "kc_morphology_name": "Croissant"}
@@ -3609,8 +3599,7 @@ def compute_screening_extrema(
     # 2. StrThkMin (3 cols) -- minimum stromal thickness
     #    CSO uses Utils.GetMin with the HolesEpiThickness mask and
     #    a local-minimum search (4-neighbor + 5x5 hole-free check).
-    #    See decompiled SummaryIndicesObj constructor:
-    #      m_StrThkMin = Utils.GetMin(A_0.ae(), A_0.ai(), A_0.j())
+    #    CSO uses Utils.GetMin with stromal mask.
     #    The naive global argmin picks up peripheral OCT artifacts
     #    (negative values at r > 4mm) which CSO correctly rejects.
     # ------------------------------------------------------------------
@@ -3697,7 +3686,7 @@ def compute_screening_extrema(
                 nc,
             )
             if hoa_map is not None:
-                # CSO uses 4.0mm cutoff for DZMax (decompiled line 513)
+                # CSO uses 4.0mm cutoff for DZMax
                 val, x, y = _find_extremum(hoa_map, mode="max", max_radius=4.0)
                 if val is not None:
                     dzmax_front_val = val
@@ -3728,7 +3717,7 @@ def compute_screening_extrema(
                 nc,
             )
             if hoa_map is not None:
-                # CSO uses 4.0mm cutoff for DZMax (decompiled line 516)
+                # CSO uses 4.0mm cutoff for DZMax
                 val, x, y = _find_extremum(hoa_map, mode="max", max_radius=4.0)
                 if val is not None:
                     dzmax_back_val = val
@@ -3769,7 +3758,7 @@ def compute_screening_extrema(
     # ------------------------------------------------------------------
     # 10. PDThkSI (1 col) -- Population-Deviation Thickness Symmetry Index
     #
-    # Algorithm (from decompiled KeratoconusScreeningObj, line 522-523):
+    # Algorithm (matches CSO KeratoconusScreening):
     #   1. Reconstruct normative mean (ThkM) and SD (ThkSD) thickness
     #      maps from 36 Zernike coefficients on the polar grid.
     #   2. Z-score the patient's thickness map: (thk - ThkM_norm) / ThkSD_norm
@@ -3828,13 +3817,13 @@ def compute_screening_extrema(
 # K-READINGS  (~104 columns)
 # ===================================================================
 #
-# Implements the decompiled Phoenix4 algorithm (KReadingsObj):
+# Matches CSO K-readings algorithm (KReadingsObj):
 #   - DetectAxis: discrete cylinder sweep across quarter-circle pairs
 #   - SimK (Scheimpflug path): band average in [1.25, 2.05] mm
 #   - Meridians 3/5/7 mm: cumulative zones (ro <= 1.5/2.5/3.5)
 #   - Hemimeridians 3/5/7 mm: Gaussian smooth + local min/max split
 #
-# Source: formulas_k_readings_decompiled.md (Phoenix4 KReadingsObj)
+# Source: formulas_k_readings.md
 # ===================================================================
 
 # Dioptric conversion constants
@@ -3847,7 +3836,7 @@ _CYL_THRESHOLD = 0.25
 
 def _detect_axis(profile, counts, threshold):
     """
-    Discrete cylinder-detection sweep (decompiled DetectAxis).
+    Discrete cylinder-detection sweep (matches CSO DetectAxis).
 
     Sweeps meridians 0..N/4-1.  For each pair of orthogonal full
     meridians, computes the dioptric cylinder.
@@ -4078,7 +4067,7 @@ def _compute_hemimeridians(profile, counts, prefix):
     """
     Compute hemimeridians via Gaussian smooth + local min/max search.
 
-    Algorithm (formulas_k_readings_decompiled.md Section 6):
+    Algorithm (formulas_k_readings.md Section 6):
       1. Fill holes, Gaussian-smooth (sigma=4)
       2. Find global max (flattest) and min (steepest)
       3. Find local minima
@@ -4255,7 +4244,7 @@ def compute_k_readings(raw_segments, metadata=None):
     """
     Compute ~104 K-reading columns from the sagittal curvature polar maps.
 
-    Implements the decompiled Phoenix4 algorithm (KReadingsObj):
+    Matches CSO's K-readings algorithm (KReadingsObj):
       - SimK (anterior only): Scheimpflug path, radial band [1.25, 2.05] mm
       - Meridians at 3/5/7 mm: cumulative zones (ro <= 1.5/2.5/3.5)
       - Hemimeridians at 3/5/7 mm: Gaussian smooth + local min/max split
@@ -5360,7 +5349,7 @@ def _opd_raytrace_one_diameter(
     except ValueError:
         return None, None
 
-    # 6. 3D least-squares focal point (SSOT Section 5b)
+    # 6. 3D least-squares focal point (formulas Section 5b)
     try:
         focal_x, focal_y, focal_z = estimate_focal_point(
             surface_points,
@@ -5369,7 +5358,7 @@ def _opd_raytrace_one_diameter(
     except ValueError:
         return None, None
 
-    # 7. OPL using per-ray reference plane (CSO method, SSOT Step 9-10).
+    # 7. OPL using per-ray reference plane (CSO method, formulas Step 9-10).
     #    Each ray's reference plane is perpendicular to the refracted ray
     #    and passes through the 3D focal point. The distance from the
     #    surface point to this plane along the refracted ray is:
@@ -5411,7 +5400,7 @@ def _newton_posterior_intersection(post_coeffs, refracted_dir, ant_point, max_it
     """
     Find where a refracted ray intersects the posterior biquadratic surface.
 
-    Matches CSO's ``NewtonFindPosteriorIntersection`` (SSOT Section 4b).
+    Matches CSO's ``NewtonFindPosteriorIntersection`` (formulas Section 4b).
 
     The system:
         x = ant.x + (z - ant.z) * tx     where tx = dir.x / dir.z
@@ -5538,7 +5527,7 @@ def _opd_raytrace_dual_surface(
         return None, None
 
     # 1. Create ray grid — CSO uses adaptive radial sampling for dual-surface:
-    #    nRadial = int(PupilRadius / 0.1) + 1 (SSOT Section 2)
+    #    nRadial = int(PupilRadius / 0.1) + 1 (formulas Section 2)
     n_radial = int(fitting_radius / 0.1) + 1
     n_meridional = 50
     ray_xy = create_ray_grid(fitting_radius, n_radial=n_radial, n_meridional=n_meridional)

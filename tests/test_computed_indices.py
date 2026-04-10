@@ -1549,7 +1549,7 @@ class TestShapeNormativeLimits:
                 )
 
     def test_known_values(self):
-        """Verify exact values from decompiled code."""
+        """Verify exact normative polynomial values."""
         # Anterior P95 at 8mm: 0.0007*64 + 0.0059*8 = 0.0448 + 0.0472 = 0.092
         assert abs(shape_rms_normative_p95(8.0, anterior=True) - 0.092) < 1e-10
         # Posterior P99 at 10mm: 0.0056*100 + 0.01*10 = 0.56 + 0.1 = 0.66
