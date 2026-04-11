@@ -425,15 +425,13 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
         # Internal dicts (no suffix — not CSV columns, used by ray tracing)
         result[f"_conoid_{prefix}_params"] = conoid_params
 
-        # --- Eigenvalue features (always computed if data exists) ---
-        x, y, z = None, None, None
-        if polar_map is not None:
+        # --- Eigenvalue features (reuse quadric from conoid fit) ---
+        qc = conoid_params["quadric_coeffs"] if conoid_params is not None else None
+        if qc is None and polar_map is not None:
+            # Conoid extraction failed (e.g. hyperboloid) but quadric fit
+            # itself may have succeeded — compute eigenvalues from raw fit.
             x, y, z = _polar_elevation_to_cartesian(polar_map, fitting_radius)
-        qc = (
-            _fit_quadric_surface(x, y, z)
-            if x is not None and len(x) >= _ZERNIKE_MIN_POINTS
-            else None
-        )
+            qc = _fit_quadric_surface(x, y, z) if len(x) >= _ZERNIKE_MIN_POINTS else None
 
         if qc is not None:
             A = np.array(
@@ -532,10 +530,15 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
             result[f"conoid_{prefix}_{diag_key}{_X}"] = diagnostics.get(diag_key)
 
     # --- Cross-surface features (anterior/posterior ratio) ---
-    crx_a = result.get(f"conoid_ant_CRy{_X}")
-    crx_p = result.get(f"conoid_post_CRy{_X}")
-    result[f"conoid_post_ant_CRy_ratio{_X}"] = (
+    crx_a = result.get(f"conoid_ant_CRx{_X}")
+    crx_p = result.get(f"conoid_post_CRx{_X}")
+    result[f"conoid_post_ant_CRx_ratio{_X}"] = (
         crx_p / crx_a if crx_a and crx_p and crx_a > 0 else None
+    )
+    cry_a = result.get(f"conoid_ant_CRy{_X}")
+    cry_p = result.get(f"conoid_post_CRy{_X}")
+    result[f"conoid_post_ant_CRy_ratio{_X}"] = (
+        cry_p / cry_a if cry_a and cry_p and cry_a > 0 else None
     )
     qa = result.get(f"conoid_ant_mean_Q{_X}")
     qp = result.get(f"conoid_post_mean_Q{_X}")
@@ -761,14 +764,7 @@ def _conoid_raytrace_residual_single(
     except ValueError:
         return None
 
-    meas_d1 = np.linalg.norm(meas_surface_pts - entry_points, axis=1)
-    meas_focal = np.array([meas_fx, meas_fy, meas_fz])
-    meas_fp_vec = meas_focal[np.newaxis, :] - meas_surface_pts
-    meas_d2 = np.abs(np.sum(meas_fp_vec * meas_refracted, axis=1))
-    meas_opl = n1 * meas_d1 + n2 * meas_d2
-    meas_opd = meas_opl - np.mean(meas_opl)
-
-    # --- CONOID surface ray trace ---
+    # --- CONOID surface ray trace (compute first to get reference focal point) ---
     con_surface_pts = np.column_stack((xq_v, yq_v, con_z[mask]))
     con_normals = surface_normals_from_gradients(con_dz_dx[mask], con_dz_dy[mask])
     incident_dirs_con = np.broadcast_to(incident_dir, (nv, 3)).copy()
@@ -781,14 +777,26 @@ def _conoid_raytrace_residual_single(
     except ValueError:
         return None
 
+    # Use the conoid focal point as the shared reference for BOTH OPDs.
+    # This prevents spurious defocus in the residual from focal length
+    # mismatch between measured and conoid surfaces.
+    shared_focal = np.array([con_fx, con_fy, con_fz])
+
+    # --- MEASURED OPL (referenced to conoid focal point) ---
+    meas_d1 = np.linalg.norm(meas_surface_pts - entry_points, axis=1)
+    meas_fp_vec = shared_focal[np.newaxis, :] - meas_surface_pts
+    meas_d2 = np.abs(np.sum(meas_fp_vec * meas_refracted, axis=1))
+    meas_opl = n1 * meas_d1 + n2 * meas_d2
+    meas_opd = meas_opl - np.mean(meas_opl)
+
+    # --- CONOID OPL (same shared focal point) ---
     con_d1 = np.linalg.norm(con_surface_pts - entry_points, axis=1)
-    con_focal = np.array([con_fx, con_fy, con_fz])
-    con_fp_vec = con_focal[np.newaxis, :] - con_surface_pts
+    con_fp_vec = shared_focal[np.newaxis, :] - con_surface_pts
     con_d2 = np.abs(np.sum(con_fp_vec * con_refracted, axis=1))
     con_opl = n1 * con_d1 + n2 * con_d2
     con_opd = con_opl - np.mean(con_opl)
 
-    # --- Residual OPD ---
+    # --- Residual OPD (pure shape irregularity, no spurious defocus) ---
     residual_opd = meas_opd - con_opd
 
     # --- Fit Zernike to all three ---
@@ -859,7 +867,8 @@ def _emit_conoid_opd_values(out, surf, dlabel, result, prefix_extra=""):
     hoa_res = float(np.sqrt(np.sum(coeffs_res[6:] ** 2)))
     out[f"{base}_hoa_rms_measured_um{_X}"] = hoa_meas
     out[f"{base}_hoa_rms_residual_um{_X}"] = hoa_res
-    out[f"{base}_hoa_absorption{_X}"] = 1.0 - hoa_res / hoa_meas if hoa_meas > 1e-10 else None
+    # MS-39 HOA RMS repeatability is ~0.3 µm; below that, ratio is noise.
+    out[f"{base}_hoa_absorption{_X}"] = 1.0 - hoa_res / hoa_meas if hoa_meas > 0.3 else None
 
 
 def _emit_conoid_opd_none(out, surf, dlabel, prefix_extra=""):
@@ -906,6 +915,10 @@ def compute_conoid_opd(raw_segments, metadata, conoid_result, fitting_radius=4.0
     pupil_cx = float(metadata.get("PupilCX", 0.0) or 0.0)
     pupil_cy = float(metadata.get("PupilCY", 0.0) or 0.0)
 
+    # Both surfaces use "anterior" root — the measured corneal surface
+    # is always on the observer-facing (near) side of its own ellipsoid.
+    # The "posterior" root gives the far hemisphere, which is physically
+    # meaningless for corneal topography.
     surface_configs = [
         ("ant", "elevation_anterior", "conoid_ant_quadric_coeffs", N_AIR, N_CORNEA, "anterior"),
         (
@@ -914,7 +927,7 @@ def compute_conoid_opd(raw_segments, metadata, conoid_result, fitting_radius=4.0
             "conoid_post_quadric_coeffs",
             N_CORNEA,
             N_AQUEOUS,
-            "posterior",
+            "anterior",
         ),
     ]
 
