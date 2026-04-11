@@ -5701,6 +5701,8 @@ def _newton_posterior_intersection(post_coeffs, refracted_dir, ant_point, max_it
         Posterior intersection point [x, y, z], or None if no convergence.
     """
     a, b, c, d, e, f = post_coeffs
+    if abs(refracted_dir[2]) < 1e-15:
+        return None
     tx = refracted_dir[0] / refracted_dir[2]
     ty = refracted_dir[1] / refracted_dir[2]
     ax, ay, az = ant_point
