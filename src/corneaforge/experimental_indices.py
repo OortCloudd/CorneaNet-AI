@@ -684,6 +684,7 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
 
         # Internal dicts (no suffix — not CSV columns, used by ray tracing)
         result[f"_conoid_{prefix}_params"] = conoid_params
+        result[f"conoid_{prefix}_fit_valid{_X}"] = 1 if conoid_params is not None else 0
 
         # --- Eigenvalue features (reuse quadric from conoid fit) ---
         qc = conoid_params["quadric_coeffs"] if conoid_params is not None else None
