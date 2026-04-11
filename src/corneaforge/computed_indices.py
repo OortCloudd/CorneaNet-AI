@@ -279,6 +279,174 @@ def _bq_normal(coeffs: np.ndarray, x: float, y: float) -> np.ndarray:
     return np.array([dz_dx / norm, dz_dy / norm, 1.0 / norm])
 
 
+_BQ_TIKHONOV = 1e-8  # regularization for batched normal equations
+
+
+def _bq_gather_neighbors(query_xy, tree):
+    """Batch neighbor finding with adaptive radii (exact radius match).
+
+    Uses ``query_ball_point`` on groups (apex / periphery) then a fallback
+    pass for points with fewer than ``_BQ_MIN_NEIGHBORS``.
+
+    Returns
+    -------
+    neighbor_lists : list[ndarray] — per-valid-point index arrays
+    valid_mask : ndarray (M,) bool
+    valid_idx  : ndarray
+    """
+    M = len(query_xy)
+    if tree.n < _BQ_MIN_NEIGHBORS:
+        empty = np.zeros(M, dtype=bool)
+        return [], empty, np.where(empty)[0]
+
+    dist_from_apex = np.hypot(query_xy[:, 0], query_xy[:, 1])
+    is_apex = dist_from_apex < _BQ_APEX_THRESHOLD
+
+    raw: list[list | np.ndarray] = [[] for _ in range(M)]
+
+    apex_idx = np.where(is_apex)[0]
+    if len(apex_idx):
+        for j, nl in zip(
+            apex_idx, tree.query_ball_point(query_xy[apex_idx], _BQ_RADIUS_APEX)
+        ):
+            raw[j] = nl
+
+    periph_idx = np.where(~is_apex)[0]
+    if len(periph_idx):
+        for j, nl in zip(
+            periph_idx,
+            tree.query_ball_point(query_xy[periph_idx], _BQ_RADIUS_PERIPH),
+        ):
+            raw[j] = nl
+
+    counts = np.array([len(nl) for nl in raw], dtype=np.int32)
+    need_fb = np.where(counts < _BQ_MIN_NEIGHBORS)[0]
+    if len(need_fb):
+        for j, nl in zip(
+            need_fb,
+            tree.query_ball_point(query_xy[need_fb], _BQ_FALLBACK_RADIUS),
+        ):
+            raw[j] = nl
+            counts[j] = len(nl)
+
+    valid_mask = counts >= _BQ_MIN_NEIGHBORS
+    valid_idx = np.where(valid_mask)[0]
+    neighbor_lists = [np.asarray(raw[qi]) for qi in valid_idx]
+    return neighbor_lists, valid_mask, valid_idx
+
+
+def _bq_solve_centered_chunked(neighbor_lists, xy, zv, query_xy_valid):
+    """Batched centered biquadratic solve, chunked by neighbor count.
+
+    Sorts points by count and processes in chunks so padding stays bounded.
+    Returns z, dz_dx, dz_dy arrays of length n_valid.
+    """
+    n_valid = len(neighbor_lists)
+    z_out = np.empty(n_valid)
+    dzdx_out = np.empty(n_valid)
+    dzdy_out = np.empty(n_valid)
+
+    counts = np.array([len(nl) for nl in neighbor_lists])
+    order = np.argsort(counts)
+
+    CHUNK = 256
+    for start in range(0, n_valid, CHUNK):
+        idx = order[start : start + CHUNK]
+        local_max_k = int(counts[idx].max())
+        n_chunk = len(idx)
+
+        nbr_xy_c = np.zeros((n_chunk, local_max_k, 2))
+        nbr_z_c = np.zeros((n_chunk, local_max_k))
+        cnts_c = np.empty(n_chunk, dtype=np.int32)
+        for j, vi in enumerate(idx):
+            nl = neighbor_lists[vi]
+            k = len(nl)
+            nbr_xy_c[j, :k] = xy[nl]
+            nbr_z_c[j, :k] = zv[nl]
+            cnts_c[j] = k
+
+        k_range = np.arange(local_max_k)[None, :]
+        mask = k_range < cnts_c[:, None]
+
+        dx = nbr_xy_c[:, :, 0] - query_xy_valid[idx, 0:1]
+        dy = nbr_xy_c[:, :, 1] - query_xy_valid[idx, 1:2]
+        A = np.stack(
+            [np.ones_like(dx), dx, dy, dx * dx, dx * dy, dy * dy], axis=-1
+        )
+        A[~mask] = 0.0
+        nbr_z_c[~mask] = 0.0
+
+        AtA = np.einsum("bki,bkj->bij", A, A)
+        AtA[:, range(6), range(6)] += _BQ_TIKHONOV
+        Atz = np.einsum("bki,bk->bi", A, nbr_z_c)
+        coeffs = np.linalg.solve(AtA, Atz[..., None])[..., 0]
+
+        z_out[idx] = coeffs[:, 0]
+        dzdx_out[idx] = coeffs[:, 1]
+        dzdy_out[idx] = coeffs[:, 2]
+
+    return z_out, dzdx_out, dzdy_out
+
+
+def _bq_solve_absolute_chunked(neighbor_lists, xy, zv):
+    """Batched absolute biquadratic solve (CSO: [x², y², x, y, xy, 1]), chunked.
+
+    Returns (n_valid, 6) coefficient array.
+    """
+    n_valid = len(neighbor_lists)
+    coeffs_out = np.empty((n_valid, 6))
+
+    counts = np.array([len(nl) for nl in neighbor_lists])
+    order = np.argsort(counts)
+
+    CHUNK = 256
+    for start in range(0, n_valid, CHUNK):
+        idx = order[start : start + CHUNK]
+        local_max_k = int(counts[idx].max())
+        n_chunk = len(idx)
+
+        nbr_xy_c = np.zeros((n_chunk, local_max_k, 2))
+        nbr_z_c = np.zeros((n_chunk, local_max_k))
+        cnts_c = np.empty(n_chunk, dtype=np.int32)
+        for j, vi in enumerate(idx):
+            nl = neighbor_lists[vi]
+            k = len(nl)
+            nbr_xy_c[j, :k] = xy[nl]
+            nbr_z_c[j, :k] = zv[nl]
+            cnts_c[j] = k
+
+        k_range = np.arange(local_max_k)[None, :]
+        mask = k_range < cnts_c[:, None]
+
+        x = nbr_xy_c[:, :, 0]
+        y = nbr_xy_c[:, :, 1]
+        A = np.stack(
+            [x * x, y * y, x, y, x * y, np.ones_like(x)], axis=-1
+        )
+        A[~mask] = 0.0
+        nbr_z_c[~mask] = 0.0
+
+        AtA = np.einsum("bki,bkj->bij", A, A)
+        AtA[:, range(6), range(6)] += _BQ_TIKHONOV
+        Atz = np.einsum("bki,bk->bi", A, nbr_z_c)
+        coeffs_out[idx] = np.linalg.solve(AtA, Atz[..., None])[..., 0]
+
+    return coeffs_out
+
+
+def _bq_get_surface(polar_map, r_step, missing, _cache):
+    """Get or build (xy, zv, tree) for a polar map, with optional caching."""
+    key = id(polar_map)
+    if _cache is not None and key in _cache:
+        return _cache[key]
+    xy, zv = _bq_polar_to_cartesian(polar_map, r_step=r_step, missing=missing)
+    tree = cKDTree(xy)
+    entry = (xy, zv, tree)
+    if _cache is not None:
+        _cache[key] = entry
+    return entry
+
+
 def _biquad_eval_batch(
     polar_map: np.ndarray,
     query_xy: np.ndarray,
@@ -286,31 +454,26 @@ def _biquad_eval_batch(
     missing: float = -1000.0,
     _cache: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Evaluate the biquadratic surface at many query points."""
-    key = id(polar_map)
-    if _cache is not None and key in _cache:
-        xy, zv, tree = _cache[key]
-    else:
-        xy, zv = _bq_polar_to_cartesian(polar_map, r_step=r_step, missing=missing)
-        tree = cKDTree(xy)
-        if _cache is not None:
-            _cache[key] = (xy, zv, tree)
+    """Evaluate the biquadratic surface at many query points (vectorized)."""
+    xy, zv, tree = _bq_get_surface(polar_map, r_step, missing, _cache)
+
     M = len(query_xy)
     z_out = np.full(M, np.nan)
     dzdx_out = np.full(M, np.nan)
     dzdy_out = np.full(M, np.nan)
     valid = np.zeros(M, dtype=bool)
-    for i in range(M):
-        x0, y0 = float(query_xy[i, 0]), float(query_xy[i, 1])
-        nbr = _bq_find_neighbors(x0, y0, tree, xy, zv)
-        if nbr is None:
-            continue
-        x_nbr, y_nbr, z_nbr = nbr
-        z_val, dx_val, dy_val = _bq_fit(x_nbr, y_nbr, z_nbr, x0, y0)
-        z_out[i] = z_val
-        dzdx_out[i] = dx_val
-        dzdy_out[i] = dy_val
-        valid[i] = True
+
+    nls, valid_mask, valid_idx = _bq_gather_neighbors(query_xy, tree)
+    if len(valid_idx) == 0:
+        return z_out, dzdx_out, dzdy_out, valid
+
+    z_v, dzdx_v, dzdy_v = _bq_solve_centered_chunked(
+        nls, xy, zv, query_xy[valid_idx]
+    )
+    z_out[valid_idx] = z_v
+    dzdx_out[valid_idx] = dzdx_v
+    dzdy_out[valid_idx] = dzdy_v
+    valid[valid_idx] = True
     return z_out, dzdx_out, dzdy_out, valid
 
 
@@ -322,49 +485,40 @@ def _biquad_eval_dual_batch(
     missing: float = -1000.0,
     _cache: dict | None = None,
 ):
-    """Evaluate anterior and posterior surfaces at many query points."""
-    key_ant = id(polar_map_ant)
-    if _cache is not None and key_ant in _cache:
-        xy_ant, z_ant, tree_ant = _cache[key_ant]
-    else:
-        xy_ant, z_ant = _bq_polar_to_cartesian(polar_map_ant, r_step=r_step, missing=missing)
-        tree_ant = cKDTree(xy_ant)
-        if _cache is not None:
-            _cache[key_ant] = (xy_ant, z_ant, tree_ant)
-    key_post = id(polar_map_post)
-    if _cache is not None and key_post in _cache:
-        xy_post, z_post, tree_post = _cache[key_post]
-    else:
-        xy_post, z_post = _bq_polar_to_cartesian(polar_map_post, r_step=r_step, missing=missing)
-        tree_post = cKDTree(xy_post)
-        if _cache is not None:
-            _cache[key_post] = (xy_post, z_post, tree_post)
+    """Evaluate anterior and posterior surfaces at many query points (vectorized)."""
+    xy_ant, z_ant, tree_ant = _bq_get_surface(polar_map_ant, r_step, missing, _cache)
+    xy_post, z_post, tree_post = _bq_get_surface(polar_map_post, r_step, missing, _cache)
+
     M = len(query_xy)
     ant_z_out = np.full(M, np.nan)
     ant_dzdx_out = np.full(M, np.nan)
     ant_dzdy_out = np.full(M, np.nan)
     post_coeffs_out = np.full((M, 6), np.nan)
     valid = np.zeros(M, dtype=bool)
-    for i in range(M):
-        x0, y0 = float(query_xy[i, 0]), float(query_xy[i, 1])
-        nbr_ant = _bq_find_neighbors(x0, y0, tree_ant, xy_ant, z_ant)
-        if nbr_ant is None:
-            continue
-        x_nbr_a, y_nbr_a, z_nbr_a = nbr_ant
-        z_val, dx_val, dy_val = _bq_fit(x_nbr_a, y_nbr_a, z_nbr_a, x0, y0)
-        ant_z_out[i] = z_val
-        ant_dzdx_out[i] = dx_val
-        ant_dzdy_out[i] = dy_val
-        nbr_post = _bq_find_neighbors(x0, y0, tree_post, xy_post, z_post)
-        if nbr_post is None:
-            continue
-        x_nbr_p, y_nbr_p, z_nbr_p = nbr_post
-        try:
-            pcoeffs = _bq_fit_full(x_nbr_p, y_nbr_p, z_nbr_p)
-        except ValueError:
-            continue
-        post_coeffs_out[i] = pcoeffs
-        valid[i] = True
+
+    # --- anterior ---
+    a_nls, a_vmask, a_vidx = _bq_gather_neighbors(query_xy, tree_ant)
+    if len(a_vidx) == 0:
+        return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
+
+    az, adx, ady = _bq_solve_centered_chunked(
+        a_nls, xy_ant, z_ant, query_xy[a_vidx]
+    )
+    ant_z_out[a_vidx] = az
+    ant_dzdx_out[a_vidx] = adx
+    ant_dzdy_out[a_vidx] = ady
+
+    # --- posterior (only query points that passed anterior) ---
+    p_nls, p_vmask_sub, p_vidx_sub = _bq_gather_neighbors(
+        query_xy[a_vidx], tree_post
+    )
+    if len(p_vidx_sub) == 0:
+        return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
+
+    pcoeffs = _bq_solve_absolute_chunked(p_nls, xy_post, z_post)
+    both_idx = a_vidx[p_vidx_sub]
+    post_coeffs_out[both_idx] = pcoeffs
+    valid[both_idx] = True
     return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
 
 
