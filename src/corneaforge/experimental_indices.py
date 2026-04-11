@@ -27,21 +27,19 @@ import math
 import numpy as np
 
 from corneaforge.computed_indices import (
-    _polar_elevation_to_cartesian,
-    _polar_map_apex_z,
-    _fit_zernike_coefficients,
-    _biquad_eval_batch,
-    _MISSING,
     _R_STEP_MM,
-    _ZERNIKE_MIN_POINTS,
     _ZERNIKE_MAX_ORDER,
+    _ZERNIKE_MIN_POINTS,
     N_AIR,
-    N_CORNEA,
     N_AQUEOUS,
+    N_CORNEA,
+    _biquad_eval_batch,
+    _fit_zernike_coefficients,
+    _polar_elevation_to_cartesian,
     create_ray_grid,
+    estimate_focal_point,
     snells_law_vector_batch,
     surface_normals_from_gradients,
-    estimate_focal_point,
 )
 
 # ---------------------------------------------------------------------------
@@ -425,7 +423,11 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
         x, y, z = None, None, None
         if polar_map is not None:
             x, y, z = _polar_elevation_to_cartesian(polar_map, fitting_radius)
-        qc = _fit_quadric_surface(x, y, z) if x is not None and len(x) >= _ZERNIKE_MIN_POINTS else None
+        qc = (
+            _fit_quadric_surface(x, y, z)
+            if x is not None and len(x) >= _ZERNIKE_MIN_POINTS
+            else None
+        )
 
         if qc is not None:
             A = np.array([
@@ -856,8 +858,10 @@ def compute_conoid_opd(raw_segments, metadata, conoid_result, fitting_radius=4.0
     pupil_cy = float(metadata.get("PupilCY", 0.0) or 0.0)
 
     surface_configs = [
-        ("ant", "elevation_anterior", "conoid_ant_quadric_coeffs", N_AIR, N_CORNEA, "anterior"),
-        ("post", "elevation_posterior", "conoid_post_quadric_coeffs", N_CORNEA, N_AQUEOUS, "posterior"),
+        ("ant", "elevation_anterior", "conoid_ant_quadric_coeffs",
+         N_AIR, N_CORNEA, "anterior"),
+        ("post", "elevation_posterior", "conoid_post_quadric_coeffs",
+         N_CORNEA, N_AQUEOUS, "posterior"),
     ]
 
     for surf_label, map_key, qc_key, n1, n2, surf_type in surface_configs:
