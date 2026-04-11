@@ -885,6 +885,27 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
     bqp = result.get(f"biconic_post_mean_Q{_X}")
     result[f"biconic_post_ant_Q_ratio{_X}"] = bqp / bqa if bqa and bqp and abs(bqa) > 1e-6 else None
 
+    # --- Conoid vs biconic delta features (per surface) ---
+    # These capture how much the two models disagree — large deltas
+    # indicate the conoid's algebraic cross-terms are absorbing shape
+    # that the biconic can't represent (e.g. meridional coma).
+    for prefix in ("ant", "post"):
+        crx = result.get(f"conoid_{prefix}_CRx{_X}")
+        brx = result.get(f"biconic_{prefix}_BRx{_X}")
+        result[f"delta_{prefix}_CRx_BRx{_X}"] = (
+            abs(crx - brx) if crx is not None and brx is not None else None
+        )
+        cry = result.get(f"conoid_{prefix}_CRy{_X}")
+        bry = result.get(f"biconic_{prefix}_BRy{_X}")
+        result[f"delta_{prefix}_CRy_BRy{_X}"] = (
+            abs(cry - bry) if cry is not None and bry is not None else None
+        )
+        c_rms = result.get(f"conoid_{prefix}_residual_rms_um{_X}")
+        b_rms = result.get(f"biconic_{prefix}_residual_rms_um{_X}")
+        result[f"delta_{prefix}_residual_rms{_X}"] = (
+            abs(c_rms - b_rms) if c_rms is not None and b_rms is not None else None
+        )
+
     return result
 
 
