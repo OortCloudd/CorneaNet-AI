@@ -22,9 +22,11 @@ Langenbucher A, Sauer T, Seitz B.
 J Refract Surg. 1999;15(S2):S240-S242.
 """
 
+import logging
 import math
 
 import numpy as np
+from scipy.optimize import least_squares
 
 from corneaforge.computed_indices import (
     _R_STEP_MM,
@@ -383,6 +385,264 @@ def _conoid_fit_one_surface(polar_map, fitting_radius, surface_type):
 
 
 # ---------------------------------------------------------------------------
+# Tilted biconic fit (8 parameters, Levenberg-Marquardt)
+# ---------------------------------------------------------------------------
+#
+# Per Consejo 2021: posterior asphericity is significantly corrupted by
+# tilt at all aperture radii (p<0.01).  Per Langenbucher 2023: conoid
+# CQx/CQy are coupled through shared sa3 and have 96µm P95 uncertainty
+# on the posterior surface.  The tilted biconic fixes both issues:
+# independent BQx/BQy and explicit tilt parameters.
+#
+# 8 parameters: BRx, BRy, BQx, BQy, Bz0, gamma, alpha_x, alpha_y
+# Fitted via scipy.optimize.least_squares (LM) with bounds.
+# Initialized from the algebraic conoid when available.
+
+_logger = logging.getLogger(__name__)
+
+# Bounds for LM
+_BIC_R_MIN, _BIC_R_MAX = 3.0, 15.0
+_BIC_Q_MIN, _BIC_Q_MAX = -2.0, 2.0
+_BIC_TILT_MAX = math.radians(15.0)  # ±15° max tilt
+_BIC_Z0_MARGIN = 0.5  # mm around apex
+_BIC_COND_WARN = 1e8  # Jacobian condition number threshold
+
+
+def _biconic_surface(params, x, y):
+    """
+    Evaluate tilted biconic surface height at (x, y) points.
+
+    Parameters: [BRx, BRy, BQx, BQy, Bz0, gamma, alpha_x, alpha_y]
+
+    The tilt (alpha_x, alpha_y) rotates the coordinate system before
+    evaluating the biconic.  gamma rotates around Z to align with
+    the astigmatic axis.
+    """
+    BRx, BRy, BQx, BQy, Bz0, gamma, ax, ay = params
+
+    # 1. Rotate by astigmatic axis (gamma) around Z
+    cg, sg = np.cos(gamma), np.sin(gamma)
+    xr = x * cg + y * sg
+    yr = -x * sg + y * cg
+
+    # 2. Apply tilt correction (small-angle: rotate the surface model,
+    #    which is equivalent to counter-rotating the data).
+    #    For small angles, the height correction is approximately:
+    #    z_tilt ≈ alpha_x * yr + alpha_y * xr  (first-order tilt)
+    #    This is subtracted from the biconic height.
+    tilt_correction = ax * yr + ay * xr
+
+    # 3. Evaluate biconic in the rotated frame
+    term_x = xr * xr / BRx
+    term_y = yr * yr / BRy
+    numerator = term_x + term_y
+
+    disc = 1.0 - (1.0 + BQx) * xr * xr / (BRx * BRx) - (1.0 + BQy) * yr * yr / (BRy * BRy)
+    disc = np.maximum(disc, 1e-12)
+    denominator = 1.0 + np.sqrt(disc)
+
+    z_bic = Bz0 + numerator / denominator - tilt_correction
+    return z_bic
+
+
+def _biconic_residuals(params, x, y, z):
+    """Residual vector for least_squares."""
+    return z - _biconic_surface(params, x, y)
+
+
+def _fit_biconic(x, y, z, conoid_params=None, apex_z=0.0):
+    """
+    Fit an 8-parameter tilted biconic surface via Levenberg-Marquardt.
+
+    Parameters
+    ----------
+    x, y, z : np.ndarray
+        Cartesian coordinates of data points (mm).
+    conoid_params : dict or None
+        Output of _extract_conoid_params, used for initialization.
+    apex_z : float
+        Elevation at the surface apex (mm).
+
+    Returns
+    -------
+    result : dict or None
+        BRx, BRy, BQx, BQy, Bz0, gamma, alpha_x, alpha_y,
+        residual_rms_um, jacobian_cond.
+    """
+    if len(x) < _ZERNIKE_MIN_POINTS:
+        return None
+
+    # --- Initialization ---
+    if conoid_params is not None:
+        BRx0 = conoid_params["CRx"]
+        BRy0 = conoid_params["CRy"]
+        BQx0 = np.clip(conoid_params["CQx"], _BIC_Q_MIN, _BIC_Q_MAX)
+        BQy0 = np.clip(conoid_params["CQy"], _BIC_Q_MIN, _BIC_Q_MAX)
+        gamma0 = math.radians(conoid_params["axis_gamma"])
+    else:
+        # Fallback: crude sphere estimate
+        h2 = x * x + y * y
+        z_rc = z - apex_z
+        z2 = z_rc * z_rc
+        denom = 2.0 * np.sum(z2)
+        R0 = float(np.sum((h2 + z2) * z_rc) / denom) if denom > 1e-30 else 7.8
+        R0 = np.clip(R0, _BIC_R_MIN, _BIC_R_MAX)
+        BRx0 = R0
+        BRy0 = R0
+        BQx0 = -0.2
+        BQy0 = -0.2
+        gamma0 = 0.0
+
+    p0 = np.array([BRx0, BRy0, BQx0, BQy0, apex_z, gamma0, 0.0, 0.0])
+
+    # --- Bounds ---
+    lower = np.array(
+        [
+            _BIC_R_MIN,
+            _BIC_R_MIN,
+            _BIC_Q_MIN,
+            _BIC_Q_MIN,
+            apex_z - _BIC_Z0_MARGIN,
+            -math.pi,
+            -_BIC_TILT_MAX,
+            -_BIC_TILT_MAX,
+        ]
+    )
+    upper = np.array(
+        [
+            _BIC_R_MAX,
+            _BIC_R_MAX,
+            _BIC_Q_MAX,
+            _BIC_Q_MAX,
+            apex_z + _BIC_Z0_MARGIN,
+            math.pi,
+            _BIC_TILT_MAX,
+            _BIC_TILT_MAX,
+        ]
+    )
+
+    # Clip initial guess to bounds
+    p0 = np.clip(p0, lower + 1e-10, upper - 1e-10)
+
+    # --- Levenberg-Marquardt ---
+    try:
+        sol = least_squares(
+            _biconic_residuals,
+            p0,
+            args=(x, y, z),
+            method="trf",  # trust-region reflective (supports bounds)
+            bounds=(lower, upper),
+            max_nfev=500,
+            ftol=1e-12,
+            xtol=1e-12,
+            gtol=1e-12,
+        )
+    except Exception:
+        return None
+
+    if not sol.success and sol.status not in (1, 2, 3, 4):
+        return None
+
+    BRx, BRy, BQx, BQy, Bz0, gamma, ax, ay = sol.x
+
+    # --- Residual RMS ---
+    rms_mm = float(np.sqrt(np.mean(sol.fun**2)))
+
+    # --- Jacobian condition number check ---
+    jac_cond = None
+    if sol.jac is not None:
+        try:
+            sv = np.linalg.svd(sol.jac, compute_uv=False)
+            if sv[-1] > 0:
+                jac_cond = float(sv[0] / sv[-1])
+                if jac_cond > _BIC_COND_WARN:
+                    _logger.warning(
+                        "Biconic Jacobian condition number %.2e exceeds "
+                        "threshold %.2e — fit may be unstable",
+                        jac_cond,
+                        _BIC_COND_WARN,
+                    )
+        except np.linalg.LinAlgError:
+            pass
+
+    # Normalize gamma to [0, 180) degrees
+    gamma_deg = math.degrees(gamma) % 180.0
+
+    return {
+        "BRx": float(BRx),
+        "BRy": float(BRy),
+        "BQx": float(BQx),
+        "BQy": float(BQy),
+        "Bz0": float(Bz0),
+        "gamma": gamma_deg,
+        "alpha_x": math.degrees(ax),
+        "alpha_y": math.degrees(ay),
+        "residual_rms_um": rms_mm * 1000.0,
+        "jacobian_cond": jac_cond,
+    }
+
+
+def _biconic_fit_one_surface(polar_map, fitting_radius, conoid_params=None):
+    """
+    Fit tilted biconic to one corneal surface and compute Zernike residuals.
+
+    Returns (biconic_params, zernike_coeffs_um, diagnostics) or (None, ...).
+    """
+    diagnostics = {}
+    if polar_map is None:
+        return None, None, diagnostics
+
+    x, y, z = _polar_elevation_to_cartesian(polar_map, fitting_radius)
+    if len(x) < _ZERNIKE_MIN_POINTS:
+        return None, None, diagnostics
+
+    # Apex z from row 0
+    row0 = polar_map[0].astype(np.float64)
+    row0_valid = row0[row0 != -1000]
+    apex_z = float(np.mean(row0_valid)) if len(row0_valid) > 0 else 0.0
+
+    # Fit biconic
+    bic = _fit_biconic(x, y, z, conoid_params=conoid_params, apex_z=apex_z)
+    if bic is None:
+        return None, None, diagnostics
+
+    diagnostics["residual_rms_um"] = bic["residual_rms_um"]
+    diagnostics["jacobian_cond"] = bic["jacobian_cond"]
+
+    # Compute residuals in instrument frame
+    params_vec = np.array(
+        [
+            bic["BRx"],
+            bic["BRy"],
+            bic["BQx"],
+            bic["BQy"],
+            bic["Bz0"],
+            math.radians(bic["gamma"]),
+            math.radians(bic["alpha_x"]),
+            math.radians(bic["alpha_y"]),
+        ]
+    )
+    z_bic = _biconic_surface(params_vec, x, y)
+    delta_z = z - z_bic
+
+    # Zernike on biconic residuals
+    zernike_coeffs_um, rms_fit = _fit_zernike_coefficients(
+        x, y, delta_z, fitting_radius, max_order=_ZERNIKE_MAX_ORDER
+    )
+    if rms_fit is not None:
+        diagnostics["fit_rms_um"] = rms_fit * 1000.0
+
+    # Sanity checks
+    if zernike_coeffs_um is not None:
+        c = zernike_coeffs_um
+        diagnostics["tilt_check_um"] = float(np.sqrt(c[1] ** 2 + c[2] ** 2))
+        diagnostics["defocus_check_um"] = float(abs(c[4]))
+        diagnostics["astig_check_um"] = float(np.sqrt(c[3] ** 2 + c[5] ** 2))
+
+    return bic, zernike_coeffs_um, diagnostics
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -529,6 +789,77 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
         for diag_key in ["residual_rms_um", "fit_rms_um"]:
             result[f"conoid_{prefix}_{diag_key}{_X}"] = diagnostics.get(diag_key)
 
+        # =============================================================
+        # Layer 3: Tilted biconic refit (8 params, LM)
+        # =============================================================
+        # Independent BQx/BQy (not coupled through sa3 like CQx/CQy).
+        # Explicit tilt correction (Consejo 2021: posterior Q corrupted
+        # without it at all apertures, p<0.01).
+        bic_params, bic_zernike_um, bic_diag = _biconic_fit_one_surface(
+            polar_map, fitting_radius, conoid_params=conoid_params
+        )
+
+        if bic_params is not None:
+            result[f"biconic_{prefix}_BRx{_X}"] = bic_params["BRx"]
+            result[f"biconic_{prefix}_BRy{_X}"] = bic_params["BRy"]
+            result[f"biconic_{prefix}_BQx{_X}"] = bic_params["BQx"]
+            result[f"biconic_{prefix}_BQy{_X}"] = bic_params["BQy"]
+            result[f"biconic_{prefix}_K_flat{_X}"] = 337.5 / bic_params["BRx"]
+            result[f"biconic_{prefix}_K_steep{_X}"] = 337.5 / bic_params["BRy"]
+            result[f"biconic_{prefix}_cyl{_X}"] = (
+                337.5 / bic_params["BRy"] - 337.5 / bic_params["BRx"]
+            )
+            result[f"biconic_{prefix}_mean_Q{_X}"] = (bic_params["BQx"] + bic_params["BQy"]) / 2.0
+            result[f"biconic_{prefix}_delta_Q{_X}"] = abs(bic_params["BQx"] - bic_params["BQy"])
+            result[f"biconic_{prefix}_axis{_X}"] = bic_params["gamma"]
+            result[f"biconic_{prefix}_tilt_x{_X}"] = bic_params["alpha_x"]
+            result[f"biconic_{prefix}_tilt_y{_X}"] = bic_params["alpha_y"]
+            result[f"biconic_{prefix}_residual_rms_um{_X}"] = bic_params["residual_rms_um"]
+            result[f"biconic_{prefix}_jacobian_cond{_X}"] = bic_params["jacobian_cond"]
+        else:
+            for k in [
+                "BRx",
+                "BRy",
+                "BQx",
+                "BQy",
+                "K_flat",
+                "K_steep",
+                "cyl",
+                "mean_Q",
+                "delta_Q",
+                "axis",
+                "tilt_x",
+                "tilt_y",
+                "residual_rms_um",
+                "jacobian_cond",
+            ]:
+                result[f"biconic_{prefix}_{k}{_X}"] = None
+
+        # Biconic Zernike residuals
+        if bic_zernike_um is not None:
+            for j in range(len(bic_zernike_um)):
+                result[f"biconic_{prefix}_z{j}_um{_X}"] = float(bic_zernike_um[j])
+            c = bic_zernike_um
+            result[f"biconic_{prefix}_irregular_astig_um{_X}"] = float(
+                np.sqrt(c[3] ** 2 + c[5] ** 2)
+            )
+            result[f"biconic_{prefix}_residual_coma_um{_X}"] = float(np.sqrt(c[7] ** 2 + c[8] ** 2))
+            result[f"biconic_{prefix}_residual_sa_um{_X}"] = float(abs(c[12]))
+            result[f"biconic_{prefix}_residual_hoa_rms_um{_X}"] = float(np.sqrt(np.sum(c[6:] ** 2)))
+        else:
+            for j in range(45):
+                result[f"biconic_{prefix}_z{j}_um{_X}"] = None
+            for k in [
+                "irregular_astig_um",
+                "residual_coma_um",
+                "residual_sa_um",
+                "residual_hoa_rms_um",
+            ]:
+                result[f"biconic_{prefix}_{k}{_X}"] = None
+
+        for dk in ["fit_rms_um", "tilt_check_um", "defocus_check_um", "astig_check_um"]:
+            result[f"biconic_{prefix}_{dk}{_X}"] = bic_diag.get(dk)
+
     # --- Cross-surface features (anterior/posterior ratio) ---
     crx_a = result.get(f"conoid_ant_CRx{_X}")
     crx_p = result.get(f"conoid_post_CRx{_X}")
@@ -543,6 +874,16 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
     qa = result.get(f"conoid_ant_mean_Q{_X}")
     qp = result.get(f"conoid_post_mean_Q{_X}")
     result[f"conoid_post_ant_Q_ratio{_X}"] = qp / qa if qa and qp and abs(qa) > 1e-6 else None
+
+    # Biconic cross-surface ratios
+    bry_a = result.get(f"biconic_ant_BRy{_X}")
+    bry_p = result.get(f"biconic_post_BRy{_X}")
+    result[f"biconic_post_ant_BRy_ratio{_X}"] = (
+        bry_p / bry_a if bry_a and bry_p and bry_a > 0 else None
+    )
+    bqa = result.get(f"biconic_ant_mean_Q{_X}")
+    bqp = result.get(f"biconic_post_mean_Q{_X}")
+    result[f"biconic_post_ant_Q_ratio{_X}"] = bqp / bqa if bqa and bqp and abs(bqa) > 1e-6 else None
 
     return result
 
