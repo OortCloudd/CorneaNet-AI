@@ -306,9 +306,7 @@ def _bq_gather_neighbors(query_xy, tree):
 
     apex_idx = np.where(is_apex)[0]
     if len(apex_idx):
-        for j, nl in zip(
-            apex_idx, tree.query_ball_point(query_xy[apex_idx], _BQ_RADIUS_APEX)
-        ):
+        for j, nl in zip(apex_idx, tree.query_ball_point(query_xy[apex_idx], _BQ_RADIUS_APEX)):
             raw[j] = nl
 
     periph_idx = np.where(~is_apex)[0]
@@ -370,9 +368,7 @@ def _bq_solve_centered_chunked(neighbor_lists, xy, zv, query_xy_valid):
 
         dx = nbr_xy_c[:, :, 0] - query_xy_valid[idx, 0:1]
         dy = nbr_xy_c[:, :, 1] - query_xy_valid[idx, 1:2]
-        A = np.stack(
-            [np.ones_like(dx), dx, dy, dx * dx, dx * dy, dy * dy], axis=-1
-        )
+        A = np.stack([np.ones_like(dx), dx, dy, dx * dx, dx * dy, dy * dy], axis=-1)
         A[~mask] = 0.0
         nbr_z_c[~mask] = 0.0
 
@@ -420,9 +416,7 @@ def _bq_solve_absolute_chunked(neighbor_lists, xy, zv):
 
         x = nbr_xy_c[:, :, 0]
         y = nbr_xy_c[:, :, 1]
-        A = np.stack(
-            [x * x, y * y, x, y, x * y, np.ones_like(x)], axis=-1
-        )
+        A = np.stack([x * x, y * y, x, y, x * y, np.ones_like(x)], axis=-1)
         A[~mask] = 0.0
         nbr_z_c[~mask] = 0.0
 
@@ -467,9 +461,7 @@ def _biquad_eval_batch(
     if len(valid_idx) == 0:
         return z_out, dzdx_out, dzdy_out, valid
 
-    z_v, dzdx_v, dzdy_v = _bq_solve_centered_chunked(
-        nls, xy, zv, query_xy[valid_idx]
-    )
+    z_v, dzdx_v, dzdy_v = _bq_solve_centered_chunked(nls, xy, zv, query_xy[valid_idx])
     z_out[valid_idx] = z_v
     dzdx_out[valid_idx] = dzdx_v
     dzdy_out[valid_idx] = dzdy_v
@@ -501,17 +493,13 @@ def _biquad_eval_dual_batch(
     if len(a_vidx) == 0:
         return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
 
-    az, adx, ady = _bq_solve_centered_chunked(
-        a_nls, xy_ant, z_ant, query_xy[a_vidx]
-    )
+    az, adx, ady = _bq_solve_centered_chunked(a_nls, xy_ant, z_ant, query_xy[a_vidx])
     ant_z_out[a_vidx] = az
     ant_dzdx_out[a_vidx] = adx
     ant_dzdy_out[a_vidx] = ady
 
     # --- posterior (only query points that passed anterior) ---
-    p_nls, p_vmask_sub, p_vidx_sub = _bq_gather_neighbors(
-        query_xy[a_vidx], tree_post
-    )
+    p_nls, p_vmask_sub, p_vidx_sub = _bq_gather_neighbors(query_xy[a_vidx], tree_post)
     if len(p_vidx_sub) == 0:
         return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
 

@@ -527,9 +527,15 @@ def _run_job_stats(job_id: str, file_data: list[tuple[bytes, str]]):
             try:
                 conoid = compute_conoid_analysis(raw, meta)
                 # Strip internal keys (underscore prefix, non-serializable)
-                row.update({k: v for k, v in conoid.items()
-                            if not k.startswith("_") and k != "conoid_ant_quadric_coeffs"
-                            and k != "conoid_post_quadric_coeffs"})
+                row.update(
+                    {
+                        k: v
+                        for k, v in conoid.items()
+                        if not k.startswith("_")
+                        and k != "conoid_ant_quadric_coeffs"
+                        and k != "conoid_post_quadric_coeffs"
+                    }
+                )
                 row.update(compute_conoid_opd(raw, meta, conoid))
             except Exception as e:
                 logger.warning("[batch] experimental_indices failed for %s: %s", parsed["name"], e)

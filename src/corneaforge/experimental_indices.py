@@ -70,17 +70,19 @@ def _fit_quadric_surface(x, y, z):
         return None
 
     # Design matrix: [X^2, Y^2, XY, XZ, YZ, X, Y, Z, 1]
-    design = np.column_stack([
-        x * x,
-        y * y,
-        x * y,
-        x * z,
-        y * z,
-        x,
-        y,
-        z,
-        np.ones(len(x)),
-    ])
+    design = np.column_stack(
+        [
+            x * x,
+            y * y,
+            x * y,
+            x * z,
+            y * z,
+            x,
+            y,
+            z,
+            np.ones(len(x)),
+        ]
+    )
 
     rhs = -(z * z)
 
@@ -113,11 +115,13 @@ def _extract_conoid_params(quadric_coeffs):
     a11, a22, a12, a13, a23, b1, b2, b3, c = quadric_coeffs
 
     # Assemble 3x3 symmetric matrix (a33 = 1)
-    A = np.array([
-        [a11,      a12 / 2, a13 / 2],
-        [a12 / 2,  a22,     a23 / 2],
-        [a13 / 2,  a23 / 2, 1.0    ],
-    ])
+    A = np.array(
+        [
+            [a11, a12 / 2, a13 / 2],
+            [a12 / 2, a22, a23 / 2],
+            [a13 / 2, a23 / 2, 1.0],
+        ]
+    )
 
     b_vec = np.array([b1, b2, b3])
 
@@ -175,12 +179,12 @@ def _extract_conoid_params(quadric_coeffs):
         ev_sorted[:, 1] = -ev_sorted[:, 1]
 
     # Radii of curvature (mm)
-    CRx = sa1 ** 2 / sa3
-    CRy = sa2 ** 2 / sa3
+    CRx = sa1**2 / sa3
+    CRy = sa2**2 / sa3
 
     # Asphericity (conic constant Q)
-    CQx = sa1 ** 2 / sa3 ** 2 - 1.0
-    CQy = sa2 ** 2 / sa3 ** 2 - 1.0
+    CQx = sa1**2 / sa3**2 - 1.0
+    CQy = sa2**2 / sa3**2 - 1.0
 
     # Apex position: closest point on ellipsoid to observer (min Z).
     # In principal coords, apex_principal = [0, 0, -sa3].
@@ -193,14 +197,14 @@ def _extract_conoid_params(quadric_coeffs):
     e1 = ev_sorted[:, 0]  # flat-meridian eigenvector
 
     alpha_deg = math.degrees(math.asin(np.clip(-e3[1], -1.0, 1.0)))  # tilt around X
-    beta_deg = math.degrees(math.asin(np.clip(e3[0], -1.0, 1.0)))    # tilt around Y
-    gamma_deg = math.degrees(math.atan2(e1[1], e1[0])) % 180.0       # astigmatic axis
+    beta_deg = math.degrees(math.asin(np.clip(e3[0], -1.0, 1.0)))  # tilt around Y
+    gamma_deg = math.degrees(math.atan2(e1[1], e1[0])) % 180.0  # astigmatic axis
 
     return {
-        "semi_axes": sa_sorted,            # (sa1, sa2, sa3) in mm
-        "center": X0,                      # (3,) mm
-        "apex": apex,                       # (3,) mm
-        "rotation_matrix": ev_sorted,       # (3,3) columns = principal axes
+        "semi_axes": sa_sorted,  # (sa1, sa2, sa3) in mm
+        "center": X0,  # (3,) mm
+        "apex": apex,  # (3,) mm
+        "rotation_matrix": ev_sorted,  # (3,3) columns = principal axes
         "eigenvalues": eigenvalues[sorted_idx],
         "d": d,
         "CRx": CRx,
@@ -233,7 +237,7 @@ def _transform_to_canonical(x, y, z, conoid_params):
     X0 = conoid_params["center"]
 
     pts = np.column_stack([x, y, z])  # (N, 3)
-    canonical = (pts - X0) @ U          # (N, 3)
+    canonical = (pts - X0) @ U  # (N, 3)
 
     return canonical[:, 0], canonical[:, 1], canonical[:, 2]
 
@@ -333,7 +337,9 @@ def _conoid_fit_one_surface(polar_map, fitting_radius, surface_type):
     # side of their respective ellipsoids.  The "posterior" root (far side)
     # is only meaningful for ray tracing (rays exiting through the back).
     z_conoid, _, _, conoid_valid = _conoid_eval_surface(
-        quadric_coeffs, query_xy, "anterior",
+        quadric_coeffs,
+        query_xy,
+        "anterior",
     )
 
     # Keep only points where the conoid evaluation succeeded
@@ -346,7 +352,7 @@ def _conoid_fit_one_surface(polar_map, fitting_radius, surface_type):
     delta_z = z_v - z_con_v
 
     # Residual RMS in microns
-    residual_rms_um = float(np.sqrt(np.mean(delta_z ** 2))) * 1000.0
+    residual_rms_um = float(np.sqrt(np.mean(delta_z**2))) * 1000.0
     diagnostics["residual_rms_um"] = residual_rms_um
 
     # Steps 7-9: Zernike on residuals in the instrument frame
@@ -430,11 +436,13 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
         )
 
         if qc is not None:
-            A = np.array([
-                [qc[0], qc[2] / 2, qc[3] / 2],
-                [qc[2] / 2, qc[1], qc[4] / 2],
-                [qc[3] / 2, qc[4] / 2, 1.0],
-            ])
+            A = np.array(
+                [
+                    [qc[0], qc[2] / 2, qc[3] / 2],
+                    [qc[2] / 2, qc[1], qc[4] / 2],
+                    [qc[3] / 2, qc[4] / 2, 1.0],
+                ]
+            )
             evals = np.sort(np.linalg.eigvalsh(A))
             n_pos = int(np.sum(evals > 0))
             result[f"conoid_{prefix}_n_positive_eigenvalues{_X}"] = n_pos
@@ -447,8 +455,13 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
                 "ellipsoid" if n_pos == 3 else "hyperboloid"
             )
         else:
-            for k in ["n_positive_eigenvalues", "eigenvalue_min", "eigenvalue_max",
-                       "eigenvalue_ratio", "quadric_type"]:
+            for k in [
+                "n_positive_eigenvalues",
+                "eigenvalue_min",
+                "eigenvalue_max",
+                "eigenvalue_ratio",
+                "quadric_type",
+            ]:
                 result[f"conoid_{prefix}_{k}{_X}"] = None
 
         if conoid_params is not None:
@@ -478,9 +491,17 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
             # result[f"conoid_{prefix}_tilt_beta{_X}"] = conoid_params["tilt_beta"]
             # result[f"conoid_{prefix}_axis_gamma{_X}"] = conoid_params["axis_gamma"]
         else:
-            for key in ["CRx", "CRy", "CQx", "CQy",
-                         "K_flat_apical", "K_steep_apical", "cyl_apical",
-                         "mean_Q", "delta_Q"]:
+            for key in [
+                "CRx",
+                "CRy",
+                "CQx",
+                "CQy",
+                "K_flat_apical",
+                "K_steep_apical",
+                "cyl_apical",
+                "mean_Q",
+                "delta_Q",
+            ]:
                 result[f"conoid_{prefix}_{key}{_X}"] = None
             result[f"conoid_{prefix}_quadric_coeffs"] = None
 
@@ -492,18 +513,18 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
             result[f"conoid_{prefix}_irregular_astig_um{_X}"] = float(
                 np.sqrt(c[3] ** 2 + c[5] ** 2)
             )
-            result[f"conoid_{prefix}_residual_coma_um{_X}"] = float(
-                np.sqrt(c[7] ** 2 + c[8] ** 2)
-            )
+            result[f"conoid_{prefix}_residual_coma_um{_X}"] = float(np.sqrt(c[7] ** 2 + c[8] ** 2))
             result[f"conoid_{prefix}_residual_sa_um{_X}"] = float(abs(c[12]))
-            result[f"conoid_{prefix}_residual_hoa_rms_um{_X}"] = float(
-                np.sqrt(np.sum(c[6:] ** 2))
-            )
+            result[f"conoid_{prefix}_residual_hoa_rms_um{_X}"] = float(np.sqrt(np.sum(c[6:] ** 2)))
         else:
             for j in range(45):
                 result[f"conoid_{prefix}_z{j}_um{_X}"] = None
-            for k in ["irregular_astig_um", "residual_coma_um",
-                       "residual_sa_um", "residual_hoa_rms_um"]:
+            for k in [
+                "irregular_astig_um",
+                "residual_coma_um",
+                "residual_sa_um",
+                "residual_hoa_rms_um",
+            ]:
                 result[f"conoid_{prefix}_{k}{_X}"] = None
 
         # --- Diagnostics ---
@@ -518,9 +539,7 @@ def compute_conoid_analysis(raw_segments, metadata, fitting_radius=4.0):
     )
     qa = result.get(f"conoid_ant_mean_Q{_X}")
     qp = result.get(f"conoid_post_mean_Q{_X}")
-    result[f"conoid_post_ant_Q_ratio{_X}"] = (
-        qp / qa if qa and qp and abs(qa) > 1e-6 else None
-    )
+    result[f"conoid_post_ant_Q_ratio{_X}"] = qp / qa if qa and qp and abs(qa) > 1e-6 else None
 
     return result
 
@@ -612,8 +631,13 @@ def _conoid_eval_surface(quadric_coeffs, query_xy, surface="anterior"):
 
 
 def _conoid_raytrace_single(
-    quadric_coeffs, fitting_radius, n1, n2,
-    surface="anterior", offset_x=0.0, offset_y=0.0,
+    quadric_coeffs,
+    fitting_radius,
+    n1,
+    n2,
+    surface="anterior",
+    offset_x=0.0,
+    offset_y=0.0,
 ):
     """
     Trace collimated rays through the analytical conoid surface.
@@ -660,7 +684,11 @@ def _conoid_raytrace_single(
     opd = opl - np.mean(opl)
 
     coeffs_um, _ = _fit_zernike_coefficients(
-        x_v, y_v, opd, fitting_radius, max_order=_CONOID_ZERNIKE_ORDER,
+        x_v,
+        y_v,
+        opd,
+        fitting_radius,
+        max_order=_CONOID_ZERNIKE_ORDER,
     )
     if coeffs_um is None:
         return None, None
@@ -669,8 +697,15 @@ def _conoid_raytrace_single(
 
 
 def _conoid_raytrace_residual_single(
-    polar_map, quadric_coeffs, fitting_radius, n1, n2,
-    surface="anterior", offset_x=0.0, offset_y=0.0, _cache=None,
+    polar_map,
+    quadric_coeffs,
+    fitting_radius,
+    n1,
+    n2,
+    surface="anterior",
+    offset_x=0.0,
+    offset_y=0.0,
+    _cache=None,
 ):
     """
     Compute conoid-referenced OPD for a single corneal surface.
@@ -689,11 +724,15 @@ def _conoid_raytrace_residual_single(
 
     # Evaluate MEASURED surface (biquadratic interpolation)
     meas_z, meas_dz_dx, meas_dz_dy, meas_valid = _biquad_eval_batch(
-        polar_map, query_xy, _cache=_cache,
+        polar_map,
+        query_xy,
+        _cache=_cache,
     )
     # Evaluate CONOID surface (analytical)
     con_z, con_dz_dx, con_dz_dy, con_valid = _conoid_eval_surface(
-        quadric_coeffs, query_xy, surface,
+        quadric_coeffs,
+        query_xy,
+        surface,
     )
 
     both_valid = meas_valid & con_valid
@@ -754,13 +793,25 @@ def _conoid_raytrace_residual_single(
 
     # --- Fit Zernike to all three ---
     coeffs_meas_um, _ = _fit_zernike_coefficients(
-        x_v, y_v, meas_opd, fitting_radius, max_order=_CONOID_ZERNIKE_ORDER,
+        x_v,
+        y_v,
+        meas_opd,
+        fitting_radius,
+        max_order=_CONOID_ZERNIKE_ORDER,
     )
     coeffs_con_um, _ = _fit_zernike_coefficients(
-        x_v, y_v, con_opd, fitting_radius, max_order=_CONOID_ZERNIKE_ORDER,
+        x_v,
+        y_v,
+        con_opd,
+        fitting_radius,
+        max_order=_CONOID_ZERNIKE_ORDER,
     )
     coeffs_res_um, _ = _fit_zernike_coefficients(
-        x_v, y_v, residual_opd, fitting_radius, max_order=_CONOID_ZERNIKE_ORDER,
+        x_v,
+        y_v,
+        residual_opd,
+        fitting_radius,
+        max_order=_CONOID_ZERNIKE_ORDER,
     )
 
     if coeffs_meas_um is None or coeffs_con_um is None or coeffs_res_um is None:
@@ -808,9 +859,7 @@ def _emit_conoid_opd_values(out, surf, dlabel, result, prefix_extra=""):
     hoa_res = float(np.sqrt(np.sum(coeffs_res[6:] ** 2)))
     out[f"{base}_hoa_rms_measured_um{_X}"] = hoa_meas
     out[f"{base}_hoa_rms_residual_um{_X}"] = hoa_res
-    out[f"{base}_hoa_absorption{_X}"] = (
-        1.0 - hoa_res / hoa_meas if hoa_meas > 1e-10 else None
-    )
+    out[f"{base}_hoa_absorption{_X}"] = 1.0 - hoa_res / hoa_meas if hoa_meas > 1e-10 else None
 
 
 def _emit_conoid_opd_none(out, surf, dlabel, prefix_extra=""):
@@ -858,10 +907,15 @@ def compute_conoid_opd(raw_segments, metadata, conoid_result, fitting_radius=4.0
     pupil_cy = float(metadata.get("PupilCY", 0.0) or 0.0)
 
     surface_configs = [
-        ("ant", "elevation_anterior", "conoid_ant_quadric_coeffs",
-         N_AIR, N_CORNEA, "anterior"),
-        ("post", "elevation_posterior", "conoid_post_quadric_coeffs",
-         N_CORNEA, N_AQUEOUS, "posterior"),
+        ("ant", "elevation_anterior", "conoid_ant_quadric_coeffs", N_AIR, N_CORNEA, "anterior"),
+        (
+            "post",
+            "elevation_posterior",
+            "conoid_post_quadric_coeffs",
+            N_CORNEA,
+            N_AQUEOUS,
+            "posterior",
+        ),
     ]
 
     for surf_label, map_key, qc_key, n1, n2, surf_type in surface_configs:
@@ -886,8 +940,13 @@ def compute_conoid_opd(raw_segments, metadata, conoid_result, fitting_radius=4.0
 
             # Pupil-centered (offset = 0)
             result = _conoid_raytrace_residual_single(
-                polar_map, quadric_coeffs, fr, n1, n2,
-                surface=surf_type, _cache=_cache,
+                polar_map,
+                quadric_coeffs,
+                fr,
+                n1,
+                n2,
+                surface=surf_type,
+                _cache=_cache,
             )
             if result is None:
                 _emit_conoid_opd_none(out, surf_label, dlabel)
@@ -897,8 +956,14 @@ def compute_conoid_opd(raw_segments, metadata, conoid_result, fitting_radius=4.0
             # CV-centered (offset from metadata)
             if abs(pupil_cx) > 0.001 or abs(pupil_cy) > 0.001:
                 result_cv = _conoid_raytrace_residual_single(
-                    polar_map, quadric_coeffs, fr, n1, n2,
-                    surface=surf_type, offset_x=-pupil_cx, offset_y=-pupil_cy,
+                    polar_map,
+                    quadric_coeffs,
+                    fr,
+                    n1,
+                    n2,
+                    surface=surf_type,
+                    offset_x=-pupil_cx,
+                    offset_y=-pupil_cy,
                     _cache=_cache,
                 )
                 if result_cv is None:
