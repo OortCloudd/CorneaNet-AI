@@ -48,6 +48,7 @@ from corneaforge.computed_indices import (
 )
 from corneaforge.core import parse_csv, parse_metadata
 from corneaforge.descriptive_stats import process_segments as stats_process
+from corneaforge.experimental_indices import compute_conoid_analysis, compute_conoid_opd
 from corneaforge.nn_pipeline import process_segments as nn_process
 from corneaforge.validate import validate_parsed
 from corneaforge.visual_pipeline import process_segments as visual_process
@@ -521,6 +522,17 @@ def _run_job_stats(job_id: str, file_data: list[tuple[bytes, str]]):
                 row.update(compute_opd_wavefront(raw, meta))
             except Exception as e:
                 logger.warning("[batch] compute_opd_wavefront failed for %s: %s", parsed["name"], e)
+
+            # --- Experimental indices (ML features, not clinical) ---
+            try:
+                conoid = compute_conoid_analysis(raw, meta)
+                # Strip internal keys (underscore prefix, non-serializable)
+                row.update({k: v for k, v in conoid.items()
+                            if not k.startswith("_") and k != "conoid_ant_quadric_coeffs"
+                            and k != "conoid_post_quadric_coeffs"})
+                row.update(compute_conoid_opd(raw, meta, conoid))
+            except Exception as e:
+                logger.warning("[batch] experimental_indices failed for %s: %s", parsed["name"], e)
 
             rows.append(_clean_stats(row))
         del parsed  # Free numpy arrays
