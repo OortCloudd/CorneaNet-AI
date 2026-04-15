@@ -570,11 +570,13 @@ def _spline_build_surface(polar_map, r_step=0.2, missing=-1000.0, _cache=None):
 
     pad = _SPLINE_PAD
     data_padded = np.concatenate([data[:, -pad:], data, data[:, :pad]], axis=1)
-    thetas_padded = np.concatenate([
-        thetas[-pad:] - 2 * np.pi,
-        thetas,
-        thetas[:pad] + 2 * np.pi,
-    ])
+    thetas_padded = np.concatenate(
+        [
+            thetas[-pad:] - 2 * np.pi,
+            thetas,
+            thetas[:pad] + 2 * np.pi,
+        ]
+    )
 
     spline = _RectBivariateSpline(radii, thetas_padded, data_padded, kx=3, ky=3)
     max_r = radii[-1]
@@ -601,7 +603,10 @@ def _spline_eval_batch(
     (z, dz_dx, dz_dy, valid) tuple.
     """
     spline, max_r, ring_valid_frac, _ = _spline_build_surface(
-        polar_map, r_step, missing, _cache,
+        polar_map,
+        r_step,
+        missing,
+        _cache,
     )
 
     M = len(query_xy)
@@ -676,7 +681,10 @@ def _spline_eval_dual_batch(
     """
     # --- anterior: spline ---
     spline, max_r, ring_vf, _ = _spline_build_surface(
-        polar_map_ant, r_step, missing, _cache,
+        polar_map_ant,
+        r_step,
+        missing,
+        _cache,
     )
 
     M = len(query_xy)
@@ -5999,9 +6007,7 @@ def _newton_posterior_intersection(post_coeffs, refracted_dir, ant_point, max_it
 # ---------------------------------------------------------------------------
 
 
-def _newton_posterior_batch_spline(
-    post_spline, refracted_dirs, ant_points, max_iter=20, tol=1e-6
-):
+def _newton_posterior_batch_spline(post_spline, refracted_dirs, ant_points, max_iter=20, tol=1e-6):
     """Vectorized Newton iteration against a global posterior spline.
 
     Finds where each refracted ray intersects the posterior surface.
@@ -6160,9 +6166,7 @@ def _opd_raytrace_dual_surface(
 
     # 2. Evaluate ANTERIOR surface (spline)
     query_xy = np.column_stack((ray_xy[:, 0] - offset_x, ray_xy[:, 1] - offset_y))
-    ant_z, ant_dzdx, ant_dzdy, valid = _spline_eval_batch(
-        ant_map, query_xy, _cache=_cache
-    )
+    ant_z, ant_dzdx, ant_dzdy, valid = _spline_eval_batch(ant_map, query_xy, _cache=_cache)
 
     # Filter to valid rays
     n_valid = int(np.sum(valid))
@@ -6199,7 +6203,9 @@ def _opd_raytrace_dual_surface(
     # 6. Vectorized Newton iteration against posterior spline
     post_spline, _, _, _ = _spline_build_surface(post_map, _cache=_cache)
     post_points, post_normals, ray_valid = _newton_posterior_batch_spline(
-        post_spline, refracted_ant, ant_points,
+        post_spline,
+        refracted_ant,
+        ant_points,
     )
 
     # Filter out failed Newton iterations
