@@ -26,7 +26,7 @@ import threading
 import time
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 # Prevent OpenBLAS from spawning many threads per NumPy call.
 # Parallelism is handled at a higher level (ThreadPoolExecutor intra-patient,
@@ -76,6 +76,10 @@ MAPS_DIR = os.path.join(tempfile.gettempdir(), "corneaforge_maps")
 _MAX_MAP_DIRS = 10  # Keep maps for the last 10 predictions
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+# Number of parallel workers for /research batch jobs.
+# Respects SLURM cgroup allocation, Docker --cpus, or uses all cores.
+_N_WORKERS = len(os.sched_getaffinity(0))
 
 logger = logging.getLogger("corneaforge")
 
@@ -473,92 +477,134 @@ def _parse_one_upload(contents: bytes, filename: str) -> dict | None:
     return {"name": name, "metadata": metadata, "raw_segments": raw_segments}
 
 
+# ---------------------------------------------------------------------------
+# Per-patient worker functions (top-level for ProcessPoolExecutor pickling)
+# ---------------------------------------------------------------------------
+
+
+def _worker_stats(contents: bytes, filename: str) -> dict | None:
+    """Process one patient into a feature-row dict. Runs in a worker process."""
+    parsed = _parse_one_upload(contents, filename)
+    if not parsed:
+        return None
+
+    raw = parsed["raw_segments"]
+    meta = parsed["metadata"]
+    row = stats_process(raw, meta, parsed["name"])
+    zernike: dict = {}
+
+    for name, func, args in [
+        ("compute_summary_indices", compute_summary_indices, (raw,)),
+        ("compute_k_readings", compute_k_readings, (raw, meta)),
+        ("compute_shape_indices", compute_shape_indices, (raw,)),
+        ("compute_screening_indices", compute_screening_indices, (raw, meta)),
+        ("compute_abcd_staging", compute_abcd_staging, (raw,)),
+        ("compute_epithelial_sectors", compute_epithelial_sectors, (raw, meta)),
+    ]:
+        try:
+            row.update(func(*args))
+        except Exception as e:
+            logger.warning("[batch] %s failed for %s: %s", name, parsed["name"], e)
+
+    try:
+        zernike = compute_zernike_indices(raw, meta)
+        row.update(zernike)
+    except Exception as e:
+        logger.warning("[batch] compute_zernike_indices failed for %s: %s", parsed["name"], e)
+
+    try:
+        row.update(compute_screening_extrema(raw, meta, zernike_results=zernike))
+    except Exception as e:
+        logger.warning("[batch] compute_screening_extrema failed for %s: %s", parsed["name"], e)
+
+    try:
+        row.update(compute_epithelial_refraction(raw, meta))
+    except Exception as e:
+        logger.warning("[batch] compute_epithelial_refraction failed for %s: %s", parsed["name"], e)
+
+    try:
+        row.update(compute_opd_wavefront(raw, meta))
+    except Exception as e:
+        logger.warning("[batch] compute_opd_wavefront failed for %s: %s", parsed["name"], e)
+
+    # --- Experimental indices (ML features, not clinical) ---
+    try:
+        conoid = compute_conoid_analysis(raw, meta)
+        row.update(
+            {
+                k: v
+                for k, v in conoid.items()
+                if not k.startswith("_")
+                and k != "conoid_ant_quadric_coeffs"
+                and k != "conoid_post_quadric_coeffs"
+            }
+        )
+        row.update(compute_conoid_opd(raw, meta, conoid))
+    except Exception as e:
+        logger.warning("[batch] experimental_indices failed for %s: %s", parsed["name"], e)
+
+    return _clean_stats(row)
+
+
+def _worker_tensors(contents: bytes, filename: str) -> tuple[str, bytes] | None:
+    """Process one patient into an npz buffer. Runs in a worker process."""
+    parsed = _parse_one_upload(contents, filename)
+    if not parsed:
+        return None
+    tensor, segments = nn_process(parsed["raw_segments"])
+    if tensor is None:
+        return None
+    npz_buf = io.BytesIO()
+    np.savez_compressed(npz_buf, data=tensor, segments=np.array(segments))
+    return parsed["name"], npz_buf.getvalue()
+
+
+def _worker_maps(contents: bytes, filename: str) -> tuple[str, list[tuple[str, bytes]]] | None:
+    """Process one patient into a list of (png_name, png_bytes). Runs in a worker process."""
+    parsed = _parse_one_upload(contents, filename)
+    if not parsed:
+        return None
+    with tempfile.TemporaryDirectory() as vis_dir:
+        visual_process(parsed["raw_segments"], vis_dir, patient_name=parsed["name"])
+        patient_folder = os.path.join(vis_dir, parsed["name"])
+        if not os.path.isdir(patient_folder):
+            return None
+        pngs = []
+        for png in sorted(os.listdir(patient_folder)):
+            if png.endswith(".png"):
+                png_path = os.path.join(patient_folder, png)
+                with open(png_path, "rb") as f:
+                    pngs.append((png, f.read()))
+        return parsed["name"], pngs
+
+
+# ---------------------------------------------------------------------------
+# Job runners (parallel via ProcessPoolExecutor)
+# ---------------------------------------------------------------------------
+
+
 def _run_job_stats(job_id: str, file_data: list[tuple[bytes, str]]):
-    """Background thread: process files into a stats CSV."""
+    """Process files into a stats CSV using parallel workers."""
     job = _jobs[job_id]
     job["total"] = len(file_data)
     job["start_time"] = time.time()
 
     rows = []
-    for i in range(len(file_data)):
-        contents, filename = file_data[i]
-        file_data[i] = None  # Free bytes immediately after reading
+    with ProcessPoolExecutor(max_workers=_N_WORKERS) as pool:
+        futures = {
+            pool.submit(_worker_stats, contents, filename): i
+            for i, (contents, filename) in enumerate(file_data)
+        }
+        file_data.clear()  # Free bytes — workers have copies
 
-        parsed = _parse_one_upload(contents, filename)
-        del contents  # Free raw bytes
-
-        if parsed:
-            raw = parsed["raw_segments"]
-            meta = parsed["metadata"]
-            row = stats_process(raw, meta, parsed["name"])
-            zernike: dict = {}
-
-            batch_calls: list[tuple[str, callable, tuple]] = [
-                ("compute_summary_indices", compute_summary_indices, (raw,)),
-                ("compute_k_readings", compute_k_readings, (raw, meta)),
-                ("compute_shape_indices", compute_shape_indices, (raw,)),
-                ("compute_screening_indices", compute_screening_indices, (raw, meta)),
-                ("compute_abcd_staging", compute_abcd_staging, (raw,)),
-                ("compute_epithelial_sectors", compute_epithelial_sectors, (raw, meta)),
-            ]
-
-            for name, func, args in batch_calls:
-                try:
-                    row.update(func(*args))
-                except Exception as e:
-                    logger.warning("[batch] %s failed for %s: %s", name, parsed["name"], e)
-
-            try:
-                zernike = compute_zernike_indices(raw, meta)
-                row.update(zernike)
-            except Exception as e:
-                logger.warning(
-                    "[batch] compute_zernike_indices failed for %s: %s", parsed["name"], e
-                )
-
-            try:
-                row.update(compute_screening_extrema(raw, meta, zernike_results=zernike))
-            except Exception as e:
-                logger.warning(
-                    "[batch] compute_screening_extrema failed for %s: %s", parsed["name"], e
-                )
-
-            try:
-                row.update(compute_epithelial_refraction(raw, meta))
-            except Exception as e:
-                logger.warning(
-                    "[batch] compute_epithelial_refraction failed for %s: %s", parsed["name"], e
-                )
-
-            try:
-                row.update(compute_opd_wavefront(raw, meta))
-            except Exception as e:
-                logger.warning("[batch] compute_opd_wavefront failed for %s: %s", parsed["name"], e)
-
-            # --- Experimental indices (ML features, not clinical) ---
-            try:
-                conoid = compute_conoid_analysis(raw, meta)
-                # Strip internal keys (underscore prefix, non-serializable)
-                row.update(
-                    {
-                        k: v
-                        for k, v in conoid.items()
-                        if not k.startswith("_")
-                        and k != "conoid_ant_quadric_coeffs"
-                        and k != "conoid_post_quadric_coeffs"
-                    }
-                )
-                row.update(compute_conoid_opd(raw, meta, conoid))
-            except Exception as e:
-                logger.warning("[batch] experimental_indices failed for %s: %s", parsed["name"], e)
-
-            rows.append(_clean_stats(row))
-        del parsed  # Free numpy arrays
-
-        job["done"] = i + 1
-        elapsed = time.time() - job["start_time"]
-        if job["done"] > 0:
-            job["eta"] = round(elapsed / job["done"] * (job["total"] - job["done"]))
+        for fut in futures:
+            row = fut.result()
+            if row is not None:
+                rows.append(row)
+            job["done"] = job.get("done", 0) + 1
+            elapsed = time.time() - job["start_time"]
+            if job["done"] > 0:
+                job["eta"] = round(elapsed / job["done"] * (job["total"] - job["done"]))
 
     if rows:
         buf = io.BytesIO()
@@ -572,33 +618,29 @@ def _run_job_stats(job_id: str, file_data: list[tuple[bytes, str]]):
 
 
 def _run_job_tensors(job_id: str, file_data: list[tuple[bytes, str]]):
-    """Background thread: process files into a tensors zip."""
+    """Process files into a tensors zip using parallel workers."""
     job = _jobs[job_id]
     job["total"] = len(file_data)
     job["start_time"] = time.time()
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i in range(len(file_data)):
-            contents, filename = file_data[i]
-            file_data[i] = None
+        with ProcessPoolExecutor(max_workers=_N_WORKERS) as pool:
+            futures = {
+                pool.submit(_worker_tensors, contents, filename): i
+                for i, (contents, filename) in enumerate(file_data)
+            }
+            file_data.clear()
 
-            parsed = _parse_one_upload(contents, filename)
-            del contents
-
-            if parsed:
-                tensor, segments = nn_process(parsed["raw_segments"])
-                if tensor is not None:
-                    npz_buf = io.BytesIO()
-                    np.savez_compressed(npz_buf, data=tensor, segments=np.array(segments))
-                    npz_buf.seek(0)
-                    zf.writestr(f"{parsed['name']}.npz", npz_buf.read())
-            del parsed
-
-            job["done"] = i + 1
-            elapsed = time.time() - job["start_time"]
-            if job["done"] > 0:
-                job["eta"] = round(elapsed / job["done"] * (job["total"] - job["done"]))
+            for fut in futures:
+                result = fut.result()
+                if result is not None:
+                    name, npz_bytes = result
+                    zf.writestr(f"{name}.npz", npz_bytes)
+                job["done"] = job.get("done", 0) + 1
+                elapsed = time.time() - job["start_time"]
+                if job["done"] > 0:
+                    job["eta"] = round(elapsed / job["done"] * (job["total"] - job["done"]))
 
     buf.seek(0)
     job["result"] = buf
@@ -608,33 +650,27 @@ def _run_job_tensors(job_id: str, file_data: list[tuple[bytes, str]]):
 
 
 def _run_job_maps(job_id: str, file_data: list[tuple[bytes, str]]):
-    """Background thread: process files into a maps zip."""
+    """Process files into a maps zip using parallel workers."""
     job = _jobs[job_id]
     job["total"] = len(file_data)
     job["start_time"] = time.time()
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        with tempfile.TemporaryDirectory() as vis_dir:
-            for i in range(len(file_data)):
-                contents, filename = file_data[i]
-                file_data[i] = None
+        with ProcessPoolExecutor(max_workers=_N_WORKERS) as pool:
+            futures = {
+                pool.submit(_worker_maps, contents, filename): i
+                for i, (contents, filename) in enumerate(file_data)
+            }
+            file_data.clear()
 
-                parsed = _parse_one_upload(contents, filename)
-                del contents
-
-                if parsed:
-                    visual_process(parsed["raw_segments"], vis_dir, patient_name=parsed["name"])
-                    patient_folder = os.path.join(vis_dir, parsed["name"])
-                    if os.path.isdir(patient_folder):
-                        for png in sorted(os.listdir(patient_folder)):
-                            if png.endswith(".png"):
-                                png_path = os.path.join(patient_folder, png)
-                                zf.write(png_path, f"{parsed['name']}/{png}")
-                        shutil.rmtree(patient_folder)
-                del parsed
-
-                job["done"] = i + 1
+            for fut in futures:
+                result = fut.result()
+                if result is not None:
+                    patient_name, pngs = result
+                    for png_name, png_bytes in pngs:
+                        zf.writestr(f"{patient_name}/{png_name}", png_bytes)
+                job["done"] = job.get("done", 0) + 1
                 elapsed = time.time() - job["start_time"]
                 if job["done"] > 0:
                     job["eta"] = round(elapsed / job["done"] * (job["total"] - job["done"]))
