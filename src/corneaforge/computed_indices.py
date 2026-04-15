@@ -22,6 +22,7 @@ import math
 from collections.abc import Callable
 
 import numpy as np
+from scipy.interpolate import RectBivariateSpline as _RectBivariateSpline
 from scipy.optimize import least_squares as _scipy_least_squares
 from scipy.spatial import cKDTree
 
@@ -499,6 +500,234 @@ def _biquad_eval_dual_batch(
     ant_dzdy_out[a_vidx] = ady
 
     # --- posterior (only query points that passed anterior) ---
+    p_nls, p_vmask_sub, p_vidx_sub = _bq_gather_neighbors(query_xy[a_vidx], tree_post)
+    if len(p_vidx_sub) == 0:
+        return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
+
+    pcoeffs = _bq_solve_absolute_chunked(p_nls, xy_post, z_post)
+    both_idx = a_vidx[p_vidx_sub]
+    post_coeffs_out[both_idx] = pcoeffs
+    valid[both_idx] = True
+    return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
+
+
+# ===========================================================================
+# Spline-based surface evaluation (fast drop-in for biquadratic in OPD path)
+# ===========================================================================
+#
+# The polar map is a regular grid (n_rows rings x 256 meridians).  Instead
+# of building a KD-tree + doing per-query biquadratic fits, we build a
+# single bicubic spline on the (r, theta) grid and evaluate analytically.
+# Derivatives are converted from polar to Cartesian via the chain rule.
+# ===========================================================================
+
+_SPLINE_PAD = 4  # columns to pad for theta periodicity
+
+
+def _spline_build_surface(polar_map, r_step=0.2, missing=-1000.0, _cache=None):
+    """Build a cached bicubic spline from a polar elevation map.
+
+    Returns (spline, max_r, ring_valid_frac, r_step).
+    The spline is a RectBivariateSpline on (r, theta) with periodic padding.
+    """
+    key = ("spline", id(polar_map))
+    if _cache is not None and key in _cache:
+        return _cache[key]
+
+    n_rows, n_cols = polar_map.shape
+    data = polar_map.copy().astype(np.float64)
+    miss_mask = data == missing
+    data[miss_mask] = np.nan
+
+    # Fill sparse missing values per ring (periodic linear interpolation in θ)
+    for i in range(n_rows):
+        row = data[i]
+        nans = np.isnan(row)
+        if not np.any(nans):
+            continue
+        if np.all(nans):
+            continue  # handled below
+        valid_idx = np.where(~nans)[0]
+        valid_vals = row[valid_idx]
+        ext_idx = np.concatenate([valid_idx - n_cols, valid_idx, valid_idx + n_cols])
+        ext_vals = np.tile(valid_vals, 3)
+        data[i] = np.interp(np.arange(n_cols), ext_idx, ext_vals)
+
+    # Fill fully-missing rows with nearest valid row
+    for i in range(n_rows):
+        if np.any(np.isnan(data[i])):
+            for delta in range(1, n_rows):
+                if i - delta >= 0 and not np.any(np.isnan(data[i - delta])):
+                    data[i] = data[i - delta]
+                    break
+                if i + delta < n_rows and not np.any(np.isnan(data[i + delta])):
+                    data[i] = data[i + delta]
+                    break
+
+    # Build spline on polar grid with periodic θ padding
+    radii = np.arange(n_rows) * r_step
+    thetas = np.linspace(0, 2 * np.pi, n_cols, endpoint=False)
+
+    pad = _SPLINE_PAD
+    data_padded = np.concatenate([data[:, -pad:], data, data[:, :pad]], axis=1)
+    thetas_padded = np.concatenate([
+        thetas[-pad:] - 2 * np.pi,
+        thetas,
+        thetas[:pad] + 2 * np.pi,
+    ])
+
+    spline = _RectBivariateSpline(radii, thetas_padded, data_padded, kx=3, ky=3)
+    max_r = radii[-1]
+
+    # Per-ring fraction of real data (for validity checks)
+    ring_valid_frac = np.sum(~miss_mask, axis=1).astype(float) / n_cols
+
+    result = (spline, max_r, ring_valid_frac, r_step)
+    if _cache is not None:
+        _cache[key] = result
+    return result
+
+
+def _spline_eval_batch(
+    polar_map: np.ndarray,
+    query_xy: np.ndarray,
+    r_step: float = 0.2,
+    missing: float = -1000.0,
+    _cache: dict | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluate surface at query points using bicubic spline.
+
+    Drop-in replacement for ``_biquad_eval_batch``.  Returns the same
+    (z, dz_dx, dz_dy, valid) tuple.
+    """
+    spline, max_r, ring_valid_frac, _ = _spline_build_surface(
+        polar_map, r_step, missing, _cache,
+    )
+
+    M = len(query_xy)
+    z_out = np.full(M, np.nan)
+    dzdx_out = np.full(M, np.nan)
+    dzdy_out = np.full(M, np.nan)
+    valid = np.zeros(M, dtype=bool)
+
+    x = query_xy[:, 0]
+    y = query_xy[:, 1]
+    r = np.sqrt(x * x + y * y)
+    theta = np.arctan2(y, x) % (2 * np.pi)
+
+    # Validity: within data range AND ring has enough real data
+    ring_idx = np.clip((r / r_step + 0.5).astype(int), 0, len(ring_valid_frac) - 1)
+    ok = (r <= max_r) & (ring_valid_frac[ring_idx] > 0.5)
+    if not np.any(ok):
+        return z_out, dzdx_out, dzdy_out, valid
+
+    rv = r[ok]
+    tv = theta[ok]
+
+    # Spline evaluation: z, ∂z/∂r, ∂z/∂θ
+    z_v = spline.ev(rv, tv)
+    dz_dr = spline.ev(rv, tv, dx=1)
+    dz_dtheta = spline.ev(rv, tv, dy=1)
+
+    # Chain rule: polar → Cartesian derivatives
+    #   ∂z/∂x = ∂z/∂r · cos θ  −  (1/r) · ∂z/∂θ · sin θ
+    #   ∂z/∂y = ∂z/∂r · sin θ  +  (1/r) · ∂z/∂θ · cos θ
+    cos_t = np.cos(tv)
+    sin_t = np.sin(tv)
+
+    near_apex = rv < 1e-6
+    far = ~near_apex
+
+    dzdx_v = np.zeros_like(z_v)
+    dzdy_v = np.zeros_like(z_v)
+
+    if np.any(far):
+        inv_r = 1.0 / rv[far]
+        dzdx_v[far] = dz_dr[far] * cos_t[far] - inv_r * dz_dtheta[far] * sin_t[far]
+        dzdy_v[far] = dz_dr[far] * sin_t[far] + inv_r * dz_dtheta[far] * cos_t[far]
+
+    if np.any(near_apex):
+        # At the apex, use finite-difference directional derivatives
+        eps = 1e-4
+        z0 = spline.ev(np.zeros(1), np.zeros(1))[0]
+        dzdx_v[near_apex] = (spline.ev(np.array([eps]), np.array([0.0]))[0] - z0) / eps
+        dzdy_v[near_apex] = (spline.ev(np.array([eps]), np.array([np.pi / 2]))[0] - z0) / eps
+
+    z_out[ok] = z_v
+    dzdx_out[ok] = dzdx_v
+    dzdy_out[ok] = dzdy_v
+    valid[ok] = True
+    return z_out, dzdx_out, dzdy_out, valid
+
+
+def _spline_eval_dual_batch(
+    polar_map_ant: np.ndarray,
+    polar_map_post: np.ndarray,
+    query_xy: np.ndarray,
+    r_step: float = 0.2,
+    missing: float = -1000.0,
+    _cache: dict | None = None,
+):
+    """Evaluate anterior (spline) + posterior (biquadratic) surfaces.
+
+    Drop-in replacement for ``_biquad_eval_dual_batch``.
+    Anterior uses the fast spline path; posterior keeps the biquadratic
+    fitting because the Newton iteration needs local polynomial coefficients.
+    """
+    # --- anterior: spline ---
+    spline, max_r, ring_vf, _ = _spline_build_surface(
+        polar_map_ant, r_step, missing, _cache,
+    )
+
+    M = len(query_xy)
+    ant_z_out = np.full(M, np.nan)
+    ant_dzdx_out = np.full(M, np.nan)
+    ant_dzdy_out = np.full(M, np.nan)
+    post_coeffs_out = np.full((M, 6), np.nan)
+    valid = np.zeros(M, dtype=bool)
+
+    x = query_xy[:, 0]
+    y = query_xy[:, 1]
+    r = np.sqrt(x * x + y * y)
+    theta = np.arctan2(y, x) % (2 * np.pi)
+
+    ring_idx = np.clip((r / r_step + 0.5).astype(int), 0, len(ring_vf) - 1)
+    a_ok = (r <= max_r) & (ring_vf[ring_idx] > 0.5)
+    a_vidx = np.where(a_ok)[0]
+
+    if len(a_vidx) == 0:
+        return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
+
+    rv = r[a_vidx]
+    tv = theta[a_vidx]
+    cos_t = np.cos(tv)
+    sin_t = np.sin(tv)
+
+    z_v = spline.ev(rv, tv)
+    dz_dr = spline.ev(rv, tv, dx=1)
+    dz_dtheta = spline.ev(rv, tv, dy=1)
+
+    near_apex = rv < 1e-6
+    far = ~near_apex
+    dzdx_v = np.zeros_like(z_v)
+    dzdy_v = np.zeros_like(z_v)
+
+    if np.any(far):
+        inv_r = 1.0 / rv[far]
+        dzdx_v[far] = dz_dr[far] * cos_t[far] - inv_r * dz_dtheta[far] * sin_t[far]
+        dzdy_v[far] = dz_dr[far] * sin_t[far] + inv_r * dz_dtheta[far] * cos_t[far]
+    if np.any(near_apex):
+        eps = 1e-4
+        z0 = spline.ev(np.zeros(1), np.zeros(1))[0]
+        dzdx_v[near_apex] = (spline.ev(np.array([eps]), np.array([0.0]))[0] - z0) / eps
+        dzdy_v[near_apex] = (spline.ev(np.array([eps]), np.array([np.pi / 2]))[0] - z0) / eps
+
+    ant_z_out[a_vidx] = z_v
+    ant_dzdx_out[a_vidx] = dzdx_v
+    ant_dzdy_out[a_vidx] = dzdy_v
+
+    # --- posterior: biquadratic (Newton iteration needs local coefficients) ---
+    xy_post, z_post, tree_post = _bq_get_surface(polar_map_post, r_step, missing, _cache)
     p_nls, p_vmask_sub, p_vidx_sub = _bq_gather_neighbors(query_xy[a_vidx], tree_post)
     if len(p_vidx_sub) == 0:
         return ant_z_out, ant_dzdx_out, ant_dzdy_out, post_coeffs_out, valid
@@ -5589,7 +5818,7 @@ def _opd_raytrace_one_diameter(
     #    The map center ~ pupil center (or vertex for Scheimpflug).
     #    analysis_coords = map_coords + offset  =>  map = analysis - offset
     query_xy = np.column_stack((ray_xy[:, 0] - offset_x, ray_xy[:, 1] - offset_y))
-    z, dz_dx, dz_dy, valid = _biquad_eval_batch(polar_map, query_xy, _cache=_cache)
+    z, dz_dx, dz_dy, valid = _spline_eval_batch(polar_map, query_xy, _cache=_cache)
 
     # Filter to valid rays
     n_valid = int(np.sum(valid))
@@ -5766,6 +5995,124 @@ def _newton_posterior_intersection(post_coeffs, refracted_dir, ant_point, max_it
 
 
 # ---------------------------------------------------------------------------
+# Vectorized Newton posterior intersection (spline-based)
+# ---------------------------------------------------------------------------
+
+
+def _newton_posterior_batch_spline(
+    post_spline, refracted_dirs, ant_points, max_iter=20, tol=1e-6
+):
+    """Vectorized Newton iteration against a global posterior spline.
+
+    Finds where each refracted ray intersects the posterior surface.
+    Returns intersection points, outward surface normals, and a
+    convergence mask — all as NumPy arrays.
+
+    Parameters
+    ----------
+    post_spline : RectBivariateSpline
+        Posterior elevation spline in (r, θ) coordinates.
+    refracted_dirs : ndarray (N, 3)
+        Ray directions after anterior refraction.
+    ant_points : ndarray (N, 3)
+        Anterior surface intersection points.
+
+    Returns
+    -------
+    post_points : ndarray (N, 3)
+    post_normals : ndarray (N, 3)
+    converged : ndarray (N,) bool
+    """
+    N = len(ant_points)
+    tx = refracted_dirs[:, 0] / refracted_dirs[:, 2]
+    ty = refracted_dirs[:, 1] / refracted_dirs[:, 2]
+    ax = ant_points[:, 0]
+    ay = ant_points[:, 1]
+    az = ant_points[:, 2]
+
+    # Initial guess: project anterior (x, y) onto posterior
+    x = ax.copy()
+    y = ay.copy()
+    r_val = np.sqrt(x * x + y * y)
+    t_val = np.arctan2(y, x) % (2 * np.pi)
+    z = post_spline.ev(r_val, t_val)
+
+    converged = np.zeros(N, dtype=bool)
+    failed = np.zeros(N, dtype=bool)
+
+    for _ in range(max_iter):
+        active = ~(converged | failed)
+        if not np.any(active):
+            break
+
+        # Residuals (computed for all, masked later)
+        r0 = x - (ax + tx * (z - az))
+        r1 = y - (ay + ty * (z - az))
+
+        # Posterior spline value + Cartesian gradients
+        r_val = np.sqrt(x * x + y * y)
+        t_val = np.arctan2(y, x) % (2 * np.pi)
+        z_surf = post_spline.ev(r_val, t_val)
+        dz_dr = post_spline.ev(r_val, t_val, dx=1)
+        dz_dt = post_spline.ev(r_val, t_val, dy=1)
+
+        cos_t = np.cos(t_val)
+        sin_t = np.sin(t_val)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            inv_r = np.where(r_val > 1e-10, 1.0 / r_val, 0.0)
+        surf_dzdx = dz_dr * cos_t - inv_r * dz_dt * sin_t
+        surf_dzdy = dz_dr * sin_t + inv_r * dz_dt * cos_t
+
+        r2 = z - z_surf
+
+        # Jacobian row-2 elements
+        j20 = -surf_dzdx
+        j21 = -surf_dzdy
+
+        det = 1.0 + ty * j21 + tx * j20
+        singular = np.abs(det) < 1e-12
+        safe_det = np.where(singular, 1.0, det)
+
+        # Cramer's rule (vectorized)
+        nr0 = -r0
+        nr1 = -r1
+        nr2 = -r2
+
+        dx = (nr0 * (1.0 + ty * j21) + (-tx) * (nr1 * j21 - nr2)) / safe_det
+        dy = ((nr1 + ty * nr2) - nr0 * ty * j20 + tx * nr1 * j20) / safe_det
+        dz = (nr2 - nr1 * j21 - nr0 * j20) / safe_det
+
+        # Update only active, non-singular rays
+        update = active & ~singular
+        x = np.where(update, x + dx, x)
+        y = np.where(update, y + dy, y)
+        z = np.where(update, z + dz, z)
+
+        converged |= update & ((np.abs(dx) + np.abs(dy) + np.abs(dz)) < tol)
+        failed |= active & singular
+
+    # --- Posterior normals at converged intersection points ----------------
+    r_fin = np.sqrt(x * x + y * y)
+    t_fin = np.arctan2(y, x) % (2 * np.pi)
+    dz_dr_f = post_spline.ev(r_fin, t_fin, dx=1)
+    dz_dt_f = post_spline.ev(r_fin, t_fin, dy=1)
+    cos_f = np.cos(t_fin)
+    sin_f = np.sin(t_fin)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv_rf = np.where(r_fin > 1e-10, 1.0 / r_fin, 0.0)
+
+    post_dzdx = dz_dr_f * cos_f - inv_rf * dz_dt_f * sin_f
+    post_dzdy = dz_dr_f * sin_f + inv_rf * dz_dt_f * cos_f
+
+    post_normals = np.column_stack([post_dzdx, post_dzdy, -np.ones(N)])
+    norms = np.linalg.norm(post_normals, axis=1, keepdims=True)
+    post_normals /= norms
+
+    post_points = np.column_stack([x, y, z])
+    return post_points, post_normals, converged
+
+
+# ---------------------------------------------------------------------------
 # Dual-surface ray-tracing (full OPD Total)
 # ---------------------------------------------------------------------------
 
@@ -5777,8 +6124,8 @@ def _opd_raytrace_dual_surface(
     Full dual-surface ray-trace matching CSO's FromRayTracing (Total mode).
 
     Traces collimated rays through both corneal surfaces:
-    air -> anterior refraction -> corneal propagation (Newton iteration
-    to find posterior intersection) -> posterior refraction -> aqueous.
+    air -> anterior refraction -> corneal propagation (vectorized Newton
+    iteration against posterior spline) -> posterior refraction -> aqueous.
 
     Parameters
     ----------
@@ -5811,10 +6158,10 @@ def _opd_raytrace_dual_surface(
     n_meridional = 50
     ray_xy = create_ray_grid(fitting_radius, n_radial=n_radial, n_meridional=n_meridional)
 
-    # 2. Evaluate both surfaces at map-frame positions
+    # 2. Evaluate ANTERIOR surface (spline)
     query_xy = np.column_stack((ray_xy[:, 0] - offset_x, ray_xy[:, 1] - offset_y))
-    ant_z, ant_dzdx, ant_dzdy, post_coeffs, valid = _biquad_eval_dual_batch(
-        ant_map, post_map, query_xy, _cache=_cache
+    ant_z, ant_dzdx, ant_dzdy, valid = _spline_eval_batch(
+        ant_map, query_xy, _cache=_cache
     )
 
     # Filter to valid rays
@@ -5832,7 +6179,6 @@ def _opd_raytrace_dual_surface(
     ant_z_v = ant_z[mask]
     ant_dzdx_v = ant_dzdx[mask]
     ant_dzdy_v = ant_dzdy[mask]
-    post_coeffs_v = post_coeffs[mask]
     nv = n_valid
 
     # 3. Build anterior 3D positions using QUERY coordinates
@@ -5850,28 +6196,11 @@ def _opd_raytrace_dual_surface(
     except ValueError:
         return None, None
 
-    # 6. Newton iteration: find posterior surface intersection for each ray
-    post_points = np.full((nv, 3), np.nan)
-    post_normals = np.full((nv, 3), np.nan)
-    ray_valid = np.ones(nv, dtype=bool)
-
-    for i in range(nv):
-        result = _newton_posterior_intersection(post_coeffs_v[i], refracted_ant[i], ant_points[i])
-        if result is None:
-            ray_valid[i] = False
-            continue
-        post_points[i] = result
-
-        # Posterior surface normal from biquadratic coefficients
-        # Our gradient: dz/dx = 2*a*x + c + e*y for z = a*x^2 + ...
-        pc = post_coeffs_v[i]
-        px, py = result[0], result[1]
-        post_dzdx = 2.0 * pc[0] * px + pc[2] + pc[4] * py
-        post_dzdy = 2.0 * pc[1] * py + pc[3] + pc[4] * px
-        # Normal in our convention: (dz/dx, dz/dy, -1) / norm
-        nn = np.array([post_dzdx, post_dzdy, -1.0])
-        nn /= np.linalg.norm(nn)
-        post_normals[i] = nn
+    # 6. Vectorized Newton iteration against posterior spline
+    post_spline, _, _, _ = _spline_build_surface(post_map, _cache=_cache)
+    post_points, post_normals, ray_valid = _newton_posterior_batch_spline(
+        post_spline, refracted_ant, ant_points,
+    )
 
     # Filter out failed Newton iterations
     if np.sum(ray_valid) < _ZERNIKE_MIN_POINTS:
