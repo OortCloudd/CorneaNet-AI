@@ -26,6 +26,13 @@ import threading
 import time
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
+
+# Prevent OpenBLAS from spawning many threads per NumPy call.
+# Parallelism is handled at a higher level (ThreadPoolExecutor intra-patient,
+# SLURM inter-patient) so each BLAS call should use a single core.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import numpy as np
 import pandas as pd
@@ -153,6 +160,10 @@ def _extract_features(parsed: dict, corvis_input=None) -> dict:
     """
     Extract features from parsed MS-39 data and optional Corvis manual input.
 
+    Independent compute functions run in parallel via ThreadPoolExecutor
+    (intra-patient parallelism).  OPENBLAS_NUM_THREADS=1 ensures each
+    thread uses one core without contention.
+
     Returns a dict with named keys:
       features["ms39_individual_stats"] → tabular features (descriptive stats)
       features["ms39_individual_tensor"] → (13, 224, 224) ndarray
@@ -171,59 +182,60 @@ def _extract_features(parsed: dict, corvis_input=None) -> dict:
         t0 = time.monotonic()
         logger.info("Processing %s exam...", eye)
 
-        stats = stats_process(raw, meta)
-        features["ms39_individual_stats"] = _clean_stats(stats)
-
         all_indices: dict = {}
-        zernike: dict = {}
+        tensor = None
 
-        compute_calls: list[tuple[str, callable, tuple]] = [
-            ("compute_summary_indices", compute_summary_indices, (raw,)),
-            ("compute_k_readings", compute_k_readings, (raw, meta)),
-            ("compute_shape_indices", compute_shape_indices, (raw,)),
-            ("compute_screening_indices", compute_screening_indices, (raw, meta)),
-            ("compute_abcd_staging", compute_abcd_staging, (raw,)),
-            ("compute_epithelial_sectors", compute_epithelial_sectors, (raw, meta)),
-        ]
+        with ThreadPoolExecutor() as pool:
+            # --- Group 1: all independent tasks in parallel ---------------
+            independent = {
+                "stats_process": pool.submit(stats_process, raw, meta),
+                "nn_process": pool.submit(nn_process, raw),
+                "compute_summary_indices": pool.submit(compute_summary_indices, raw),
+                "compute_k_readings": pool.submit(compute_k_readings, raw, meta),
+                "compute_shape_indices": pool.submit(compute_shape_indices, raw),
+                "compute_screening_indices": pool.submit(compute_screening_indices, raw, meta),
+                "compute_abcd_staging": pool.submit(compute_abcd_staging, raw),
+                "compute_epithelial_sectors": pool.submit(compute_epithelial_sectors, raw, meta),
+                "compute_zernike_indices": pool.submit(compute_zernike_indices, raw, meta),
+                "compute_epithelial_refraction": pool.submit(
+                    compute_epithelial_refraction, raw, meta
+                ),
+                "compute_opd_wavefront": pool.submit(compute_opd_wavefront, raw, meta),
+            }
 
-        for name, func, args in compute_calls:
+            # Collect results as they complete
+            zernike: dict = {}
+            for name, fut in independent.items():
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    logger.warning("%s failed: %s", name, e, exc_info=True)
+                    continue
+
+                if name == "stats_process":
+                    features["ms39_individual_stats"] = _clean_stats(result)
+                elif name == "nn_process":
+                    tensor = result[0]  # (tensor, segments)
+                elif name == "compute_zernike_indices":
+                    zernike = result
+                    all_indices.update(result)
+                else:
+                    all_indices.update(result)
+
+            # --- Group 2: screening_extrema depends on zernike ------------
             try:
-                result = func(*args)
+                result = pool.submit(
+                    compute_screening_extrema, raw, meta, zernike_results=zernike
+                ).result()
                 all_indices.update(result)
             except Exception as e:
-                logger.warning("%s failed: %s", name, e, exc_info=True)
-
-        # Zernike must run before screening_extrema (dependency)
-        try:
-            zernike = compute_zernike_indices(raw, meta)
-            all_indices.update(zernike)
-        except Exception as e:
-            logger.warning("compute_zernike_indices failed: %s", e, exc_info=True)
-
-        try:
-            result = compute_screening_extrema(raw, meta, zernike_results=zernike)
-            all_indices.update(result)
-        except Exception as e:
-            logger.warning("compute_screening_extrema failed: %s", e, exc_info=True)
-
-        try:
-            result = compute_epithelial_refraction(raw, meta)
-            all_indices.update(result)
-        except Exception as e:
-            logger.warning("compute_epithelial_refraction failed: %s", e, exc_info=True)
-
-        try:
-            result = compute_opd_wavefront(raw, meta)
-            all_indices.update(result)
-        except Exception as e:
-            logger.warning("compute_opd_wavefront failed: %s", e, exc_info=True)
+                logger.warning("compute_screening_extrema failed: %s", e, exc_info=True)
 
         features["computed_indices"] = _clean_stats(all_indices)
+        features["ms39_individual_tensor"] = tensor
+
         elapsed = time.monotonic() - t0
         logger.info("Computed %d indices in %.2fs", len(all_indices), elapsed)
-
-        tensor, segments = nn_process(raw)
-        features["ms39_individual_tensor"] = tensor
 
     # Corvis ST — manual input from clinician
     if corvis_input is not None:
