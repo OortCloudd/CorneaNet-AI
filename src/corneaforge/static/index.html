@@ -303,24 +303,43 @@
                     <input type="file" id="file-ms39-ind" accept=".csv" onchange="onFileSelect(this, 'name-ms39-ind')">
                 </div>
 
-                <details style="margin-bottom:12px;">
+                <details style="margin-bottom:12px;" id="corvis-section">
                     <summary style="cursor:pointer; font-size:13px; color:#666;">Corvis ST values (optional)</summary>
-                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:8px;" id="corvis-fields">
-                        <label style="font-size:12px;">IOP (mmHg)<input type="number" step="any" name="iop" style="width:100%;"></label>
-                        <label style="font-size:12px;">bIOP (mmHg)<input type="number" step="any" name="biop" style="width:100%;"></label>
-                        <label style="font-size:12px;">CCT (um)<input type="number" step="any" name="cct" style="width:100%;"></label>
-                        <label style="font-size:12px;">DA max (mm)<input type="number" step="any" name="da_max" style="width:100%;"></label>
-                        <label style="font-size:12px;">DA Ratio 1mm<input type="number" step="any" name="da_ratio_1mm" style="width:100%;"></label>
-                        <label style="font-size:12px;">DA Ratio 2mm<input type="number" step="any" name="da_ratio_2mm" style="width:100%;"></label>
-                        <label style="font-size:12px;">SP-A1<input type="number" step="any" name="sp_a1" style="width:100%;"></label>
-                        <label style="font-size:12px;">ARTh<input type="number" step="any" name="arth" style="width:100%;"></label>
-                        <label style="font-size:12px;">CBI<input type="number" step="any" name="cbi" style="width:100%;"></label>
-                        <label style="font-size:12px;">Integ. Radius (mm)<input type="number" step="any" name="integrated_radius" style="width:100%;"></label>
-                        <label style="font-size:12px;">A1 Time (ms)<input type="number" step="any" name="a1_time" style="width:100%;"></label>
-                        <label style="font-size:12px;">A1 Velocity (m/s)<input type="number" step="any" name="a1_velocity" style="width:100%;"></label>
-                        <label style="font-size:12px;">A2 Time (ms)<input type="number" step="any" name="a2_time" style="width:100%;"></label>
-                        <label style="font-size:12px;">A2 Velocity (m/s)<input type="number" step="any" name="a2_velocity" style="width:100%;"></label>
-                        <label style="font-size:12px;">Peak Dist (mm)<input type="number" step="any" name="peak_distance" style="width:100%;"></label>
+                    <div style="margin-top:8px;">
+                        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+                            <div class="upload-zone" style="flex:1; margin-bottom:0; padding:12px;"
+                                 onclick="document.getElementById('file-corvis-pdf').click()">
+                                <div class="zone-label" style="font-size:12px;">Drop Corvis ST PDF here</div>
+                                <div class="zone-filename" id="name-corvis-pdf" style="font-size:11px;"></div>
+                                <input type="file" id="file-corvis-pdf" accept=".pdf"
+                                       onchange="onFileSelect(this, 'name-corvis-pdf')">
+                            </div>
+                            <button class="btn btn-secondary" id="btn-ocr" onclick="runCorvisOCR()"
+                                    style="white-space:nowrap; font-size:12px;">Extract values</button>
+                            <div class="spinner" id="spinner-ocr" style="display:none;"></div>
+                        </div>
+                        <div id="corvis-ocr-status" style="font-size:11px; color:#666; margin-bottom:8px;"></div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;" id="corvis-fields">
+                            <label style="font-size:12px;">IOP (mmHg)<input type="number" step="any" name="iop" style="width:100%;"></label>
+                            <label style="font-size:12px;">bIOP (mmHg)<input type="number" step="any" name="biop" style="width:100%;"></label>
+                            <label style="font-size:12px;">CCT (um)<input type="number" step="any" name="cct" style="width:100%;"></label>
+                            <label style="font-size:12px;">DA max (mm)<input type="number" step="any" name="da_max" style="width:100%;"></label>
+                            <label style="font-size:12px;">DA Ratio 1mm<input type="number" step="any" name="da_ratio_1mm" style="width:100%;"></label>
+                            <label style="font-size:12px;">DA Ratio 2mm<input type="number" step="any" name="da_ratio_2mm" style="width:100%;"></label>
+                            <label style="font-size:12px;">SP-A1<input type="number" step="any" name="sp_a1" style="width:100%;"></label>
+                            <label style="font-size:12px;">ARTh<input type="number" step="any" name="arth" style="width:100%;"></label>
+                            <label style="font-size:12px;">CBI<input type="number" step="any" name="cbi" style="width:100%;"></label>
+                            <label style="font-size:12px;">Integ. Radius (mm)<input type="number" step="any" name="integrated_radius" style="width:100%;"></label>
+                            <label style="font-size:12px;">A1 Time (ms)<input type="number" step="any" name="a1_time" style="width:100%;"></label>
+                            <label style="font-size:12px;">A1 Velocity (m/s)<input type="number" step="any" name="a1_velocity" style="width:100%;"></label>
+                            <label style="font-size:12px;">A2 Time (ms)<input type="number" step="any" name="a2_time" style="width:100%;"></label>
+                            <label style="font-size:12px;">A2 Velocity (m/s)<input type="number" step="any" name="a2_velocity" style="width:100%;"></label>
+                            <label style="font-size:12px;">Peak Dist (mm)<input type="number" step="any" name="peak_distance" style="width:100%;"></label>
+                            <label style="font-size:12px;">SSI<input type="number" step="any" name="ssi" style="width:100%;"></label>
+                            <label style="font-size:12px;">Inv. Conc. Radius<input type="number" step="any" name="inverse_concave_radius" style="width:100%;"></label>
+                            <label style="font-size:12px;">A1 Length (mm)<input type="number" step="any" name="a1_length" style="width:100%;"></label>
+                            <label style="font-size:12px;">A2 Length (mm)<input type="number" step="any" name="a2_length" style="width:100%;"></label>
+                        </div>
                     </div>
                 </details>
 
@@ -422,6 +441,70 @@
             const count = csvFiles.length;
             document.getElementById('research-file-count').textContent =
                 count === 0 ? 'No CSV files found in folder' : count + ' CSV file(s) found';
+        }
+
+        // ── Corvis PDF OCR ──
+
+        async function runCorvisOCR() {
+            const pdfFile = document.getElementById('file-corvis-pdf').files[0];
+            if (!pdfFile) {
+                alert('Please select a Corvis ST PDF file first.');
+                return;
+            }
+
+            const statusEl = document.getElementById('corvis-ocr-status');
+            const btnOcr = document.getElementById('btn-ocr');
+            const spinner = document.getElementById('spinner-ocr');
+
+            btnOcr.disabled = true;
+            spinner.style.display = '';
+            spinner.classList.add('active');
+            statusEl.textContent = 'Extracting values from PDF...';
+            statusEl.style.color = '#666';
+
+            try {
+                const form = new FormData();
+                form.append('corvis_pdf', pdfFile);
+
+                const res = await fetch('/corvis/parse', { method: 'POST', body: form });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    statusEl.textContent = data.detail || 'OCR failed';
+                    statusEl.style.color = '#c0392b';
+                    return;
+                }
+
+                // Fill in the form fields with OCR'd values
+                let filled = 0;
+                for (const [key, value] of Object.entries(data.values)) {
+                    const input = document.querySelector(`#corvis-fields input[name="${key}"]`);
+                    if (input && value !== null) {
+                        input.value = value;
+                        input.style.backgroundColor = '#e8f5e9';
+                        filled++;
+                    }
+                }
+
+                let msg = filled + '/' + Object.keys(data.values).length + ' values extracted.';
+                if (data.warnings.length > 0) {
+                    msg += ' Warnings: ' + data.warnings.join('; ');
+                }
+                if (data.errors.length > 0) {
+                    msg += ' Errors: ' + data.errors.join('; ');
+                }
+                msg += ' Please review and correct if needed.';
+                statusEl.textContent = msg;
+                statusEl.style.color = data.errors.length > 0 ? '#e67e22' : '#27ae60';
+
+            } catch (err) {
+                statusEl.textContent = 'Network error: ' + err.message;
+                statusEl.style.color = '#c0392b';
+            } finally {
+                btnOcr.disabled = false;
+                spinner.classList.remove('active');
+                spinner.style.display = 'none';
+            }
         }
 
         // ── Prediction ──

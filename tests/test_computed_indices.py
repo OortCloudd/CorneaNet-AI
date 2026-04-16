@@ -462,9 +462,13 @@ class TestCorvisInput:
             a2_time=21.68,
             a2_velocity=-0.28,
             peak_distance=4.70,
+            ssi=1.05,
+            inverse_concave_radius=0.14,
+            a1_length=2.01,
+            a2_length=2.19,
         )
         d = ci.to_feature_dict()
-        assert len(d) == 15
+        assert len(d) == 19
         assert all(v is not None for v in d.values())
 
     def test_empty_input(self):

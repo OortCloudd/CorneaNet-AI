@@ -54,6 +54,7 @@ from corneaforge.computed_indices import (
     compute_zernike_indices,
 )
 from corneaforge.core import parse_csv, parse_metadata
+from corneaforge.corvis_parser import CorvisParseResult, check_ollama_available, parse_corvis_pdf
 from corneaforge.descriptive_stats import process_segments as stats_process
 from corneaforge.experimental_indices import compute_conoid_analysis, compute_conoid_opd
 from corneaforge.nn_pipeline import process_segments as nn_process
@@ -326,7 +327,7 @@ def _clean_stats(stats: dict) -> dict:
 
 
 class CorvisInput(BaseModel):
-    """Corvis ST values typed by the clinician from the printed report."""
+    """Corvis ST values — from PDF OCR or typed by the clinician."""
 
     iop: float | None = Field(None, description="IOP (mmHg)")
     biop: float | None = Field(None, description="bIOP — biomechanically corrected IOP (mmHg)")
@@ -343,6 +344,10 @@ class CorvisInput(BaseModel):
     a2_time: float | None = Field(None, description="A2 Time (ms)")
     a2_velocity: float | None = Field(None, description="A2 Velocity (m/s)")
     peak_distance: float | None = Field(None, description="Peak Distance (mm)")
+    ssi: float | None = Field(None, description="SSI — Stress-Strain Index")
+    inverse_concave_radius: float | None = Field(None, description="Inverse Concave Radius (mm⁻¹)")
+    a1_length: float | None = Field(None, description="A1 Applanation Length (mm)")
+    a2_length: float | None = Field(None, description="A2 Applanation Length (mm)")
 
     def to_feature_dict(self) -> dict:
         """Convert to a flat dict with 'corvis_' prefix for feature concatenation."""
@@ -429,6 +434,52 @@ async def predict(
 
     result = await asyncio.to_thread(_process)
     return result
+
+
+# ── Corvis ST PDF parsing ───────────────────────────────────────────
+
+
+@app.post("/corvis/parse")
+async def corvis_parse(
+    corvis_pdf: UploadFile = File(..., description="Corvis ST PDF report"),
+):
+    """Parse a Corvis ST PDF and return extracted values for clinician review.
+
+    The clinician uploads the PDF, reviews/corrects the OCR'd values in
+    the UI, then submits them with the MS-39 CSV via /predict.
+
+    Requires Ollama running locally with the VLM model pulled.
+    """
+    contents = await corvis_pdf.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="corvis_pdf file is empty")
+    if len(contents) > MAX_FILE_SIZE:
+        max_mb = MAX_FILE_SIZE // 1024 // 1024
+        raise HTTPException(status_code=413, detail=f"corvis_pdf exceeds {max_mb}MB limit")
+
+    if not check_ollama_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama VLM not available. Is the ollama service running with qwen2.5vl:7b?",
+        )
+
+    def _do_parse():
+        return parse_corvis_pdf(contents)
+
+    parsed: CorvisParseResult = await asyncio.to_thread(_do_parse)
+
+    return {
+        "values": parsed.values,
+        "warnings": parsed.warnings,
+        "errors": parsed.errors,
+    }
+
+
+@app.get("/corvis/status")
+def corvis_status():
+    """Check if Corvis PDF parsing is available (Ollama + VLM model)."""
+    available = check_ollama_available()
+    return {"available": available}
 
 
 # ── Research endpoints ────────────────────────────────────────────────
