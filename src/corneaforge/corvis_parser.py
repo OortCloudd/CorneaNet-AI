@@ -41,12 +41,22 @@ logger = logging.getLogger("corneaforge.corvis_parser")
 
 # ── Configuration ───────────────────────────────────────────────────
 
+# Backend: "ollama" or "openai" (for vLLM / SGLang).
+VLM_BACKEND = "ollama"
+
+# Ollama backend
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5vl:7b"
 OLLAMA_NUM_CTX = 4096
-OLLAMA_TIMEOUT = 120  # seconds per page
-OLLAMA_MAX_RETRIES = 2  # retries per page on transient errors
-OLLAMA_RETRY_BACKOFF = 2.0  # seconds, doubles each retry
+
+# OpenAI-compatible backend (vLLM / SGLang)
+OPENAI_URL = "http://localhost:8200/v1/chat/completions"
+OPENAI_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
+
+# Shared
+VLM_TIMEOUT = 120  # seconds per page
+VLM_MAX_RETRIES = 2  # retries per page on transient errors
+VLM_RETRY_BACKOFF = 2.0  # seconds, doubles each retry
 PDF_DPI = 200
 
 # ── Prompts ─────────────────────────────────────────────────────────
@@ -142,10 +152,8 @@ class CorvisParseResult:
 def parse_corvis_pdf(
     pdf_bytes: bytes,
     *,
-    ollama_url: str = OLLAMA_URL,
-    model: str = OLLAMA_MODEL,
-    num_ctx: int = OLLAMA_NUM_CTX,
-    timeout: int = OLLAMA_TIMEOUT,
+    backend: str = VLM_BACKEND,
+    timeout: int = VLM_TIMEOUT,
 ) -> CorvisParseResult:
     """Parse a Corvis ST PDF and extract biomechanical values.
 
@@ -153,12 +161,8 @@ def parse_corvis_pdf(
     ----------
     pdf_bytes : bytes
         Raw bytes of the Corvis ST PDF.
-    ollama_url : str
-        Ollama API endpoint.
-    model : str
-        VLM model name.
-    num_ctx : int
-        Context window size for the model.
+    backend : str
+        ``"ollama"`` or ``"openai"`` (vLLM / SGLang).
     timeout : int
         Timeout per page in seconds.
 
@@ -193,9 +197,7 @@ def parse_corvis_pdf(
                     _query_vlm,
                     page_path,
                     _EXTRACT_PROMPT,
-                    ollama_url=ollama_url,
-                    model=model,
-                    num_ctx=num_ctx,
+                    backend=backend,
                     timeout=timeout,
                 ): page_idx
                 for page_idx, page_path in enumerate(page_paths)
@@ -277,27 +279,38 @@ def parse_corvis_pdf(
     return result
 
 
-def check_ollama_available(ollama_url: str = OLLAMA_URL, model: str = OLLAMA_MODEL) -> bool:
-    """Check if Ollama is running and the model is available.
-
-    Handles tag normalization: ``qwen2.5vl:7b`` matches both
-    ``qwen2.5vl:7b`` and ``qwen2.5vl:7b-fp16`` in the Ollama model list.
-    """
+def check_vlm_available(backend: str = VLM_BACKEND) -> bool:
+    """Check if the VLM backend is reachable."""
     try:
-        req = urllib.request.Request(
-            ollama_url.replace("/api/generate", "/api/tags"),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-            names = [m["name"] for m in data.get("models", [])]
-            # Exact match first, then prefix match (handles tag variants)
-            if model in names:
-                return True
-            model_base = model.split(":")[0]
-            return any(n.startswith(model_base + ":") for n in names) if ":" not in model else False
+        if backend == "openai":
+            # vLLM / SGLang expose /v1/models
+            base = OPENAI_URL.rsplit("/v1/", 1)[0]
+            req = urllib.request.Request(f"{base}/v1/models")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+                return len(data.get("data", [])) > 0
+        else:
+            req = urllib.request.Request(
+                OLLAMA_URL.replace("/api/generate", "/api/tags"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+                names = [m["name"] for m in data.get("models", [])]
+                if OLLAMA_MODEL in names:
+                    return True
+                model_base = OLLAMA_MODEL.split(":")[0]
+                return (
+                    any(n.startswith(model_base + ":") for n in names)
+                    if ":" not in OLLAMA_MODEL
+                    else False
+                )
     except Exception:
         return False
+
+
+# Keep old name as alias for backward compatibility in server.py
+check_ollama_available = check_vlm_available
 
 
 # ── Internal helpers ────────────────────────────────────────────────
@@ -340,50 +353,82 @@ def _query_vlm(
     image_path: str,
     prompt: str,
     *,
-    ollama_url: str,
-    model: str,
-    num_ctx: int,
+    backend: str,
     timeout: int,
 ) -> str:
-    """Send an image to Ollama VLM and return the text response.
+    """Send an image to VLM and return the text response.
 
-    Retries up to ``OLLAMA_MAX_RETRIES`` times on connection / timeout
-    errors with exponential backoff.
+    Supports Ollama (``/api/generate``) and OpenAI-compatible
+    (``/v1/chat/completions``) backends.  Retries up to
+    ``VLM_MAX_RETRIES`` times on transient errors.
     """
     import base64
 
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode()
 
-    payload = json.dumps(
-        {
-            "model": model,
-            "prompt": prompt,
-            "images": [img_b64],
-            "stream": False,
-            "options": {"temperature": 0.0, "num_predict": 512, "num_ctx": num_ctx},
-        }
-    ).encode()
+    if backend == "openai":
+        url = OPENAI_URL
+        payload = json.dumps(
+            {
+                "model": OPENAI_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{img_b64}",
+                                },
+                            },
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+                "temperature": 0.0,
+                "max_tokens": 512,
+            }
+        ).encode()
+    else:
+        url = OLLAMA_URL
+        payload = json.dumps(
+            {
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "images": [img_b64],
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 512,
+                    "num_ctx": OLLAMA_NUM_CTX,
+                },
+            }
+        ).encode()
 
     last_exc: Exception | None = None
-    for attempt in range(1 + OLLAMA_MAX_RETRIES):
+    for attempt in range(1 + VLM_MAX_RETRIES):
         try:
             req = urllib.request.Request(
-                ollama_url,
+                url,
                 data=payload,
                 headers={"Content-Type": "application/json"},
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 body = json.loads(resp.read())
+
+            if backend == "openai":
+                return body["choices"][0]["message"]["content"]
             return body.get("response", "")
+
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last_exc = exc
-            if attempt < OLLAMA_MAX_RETRIES:
-                wait = OLLAMA_RETRY_BACKOFF * (2**attempt)
+            if attempt < VLM_MAX_RETRIES:
+                wait = VLM_RETRY_BACKOFF * (2**attempt)
                 logger.warning(
-                    "Ollama request failed (attempt %d/%d): %s — retrying in %.0fs",
+                    "VLM request failed (attempt %d/%d): %s — retrying in %.0fs",
                     attempt + 1,
-                    1 + OLLAMA_MAX_RETRIES,
+                    1 + VLM_MAX_RETRIES,
                     exc,
                     wait,
                 )
