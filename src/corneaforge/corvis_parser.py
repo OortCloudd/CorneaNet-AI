@@ -33,6 +33,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -183,68 +184,82 @@ def parse_corvis_pdf(
         result.errors.append("Failed to render PDF pages")
         return result
 
-    found_types: set[str] = set()
-
     try:
-        for page_idx, page_path in enumerate(page_paths):
-            page_num = page_idx + 1
-            try:
-                raw_response = _query_vlm(
+        # Query VLM for all pages in parallel
+        page_responses: dict[int, str | Exception] = {}
+        with ThreadPoolExecutor(max_workers=len(page_paths)) as pool:
+            futures = {
+                pool.submit(
+                    _query_vlm,
                     page_path,
                     _EXTRACT_PROMPT,
                     ollama_url=ollama_url,
                     model=model,
                     num_ctx=num_ctx,
                     timeout=timeout,
+                ): page_idx
+                for page_idx, page_path in enumerate(page_paths)
+            }
+            for future in as_completed(futures):
+                page_idx = futures[future]
+                try:
+                    page_responses[page_idx] = future.result()
+                except Exception as exc:
+                    page_responses[page_idx] = exc
+
+        # Process responses in page order
+        found_types: set[str] = set()
+        for page_idx in sorted(page_responses):
+            page_num = page_idx + 1
+            resp = page_responses[page_idx]
+
+            if isinstance(resp, Exception):
+                logger.warning("Page %d OCR failed: %s", page_num, resp)
+                result.errors.append(f"Page {page_num}: {resp}")
+                continue
+
+            result.raw_responses[page_num] = resp
+
+            parsed = _parse_json_response(resp)
+            if parsed is None:
+                result.errors.append(f"Page {page_num}: could not parse JSON from VLM response")
+                continue
+
+            # Identify page type
+            page_type = parsed.pop("page_type", None)
+            if page_type not in _PAGE_TYPE_LABELS:
+                result.errors.append(f"Page {page_num}: unrecognized page type {page_type!r}")
+                continue
+
+            if page_type in found_types:
+                result.warnings.append(
+                    f"Page {page_num}: duplicate {_PAGE_TYPE_LABELS[page_type]} "
+                    f"page (using first occurrence)"
                 )
-                result.raw_responses[page_num] = raw_response
+                continue
 
-                parsed = _parse_json_response(raw_response)
-                if parsed is None:
-                    result.errors.append(f"Page {page_num}: could not parse JSON from VLM response")
+            found_types.add(page_type)
+            result.pages_parsed += 1
+
+            for vlm_key, value in parsed.items():
+                corvis_field = _KEY_TO_CORVIS_FIELD.get(vlm_key)
+                if corvis_field is None:
                     continue
 
-                # Identify page type
-                page_type = parsed.pop("page_type", None)
-                if page_type not in _PAGE_TYPE_LABELS:
-                    result.errors.append(f"Page {page_num}: unrecognized page type {page_type!r}")
+                if not isinstance(value, (int, float)):
+                    result.errors.append(f"Page {page_num}: {vlm_key} is not a number ({value!r})")
                     continue
 
-                if page_type in found_types:
+                value = float(value)
+
+                # Sanity check
+                lo, hi = _VALUE_RANGES.get(corvis_field, (None, None))
+                if lo is not None and not (lo <= value <= hi):
                     result.warnings.append(
-                        f"Page {page_num}: duplicate {_PAGE_TYPE_LABELS[page_type]} "
-                        f"page (using first occurrence)"
+                        f"{corvis_field}={value} outside expected range [{lo}, {hi}]"
                     )
-                    continue
 
-                found_types.add(page_type)
-                result.pages_parsed += 1
-
-                for vlm_key, value in parsed.items():
-                    corvis_field = _KEY_TO_CORVIS_FIELD.get(vlm_key)
-                    if corvis_field is None:
-                        continue
-
-                    if not isinstance(value, (int, float)):
-                        result.errors.append(
-                            f"Page {page_num}: {vlm_key} is not a number ({value!r})"
-                        )
-                        continue
-
-                    value = float(value)
-
-                    # Sanity check
-                    lo, hi = _VALUE_RANGES.get(corvis_field, (None, None))
-                    if lo is not None and not (lo <= value <= hi):
-                        result.warnings.append(
-                            f"{corvis_field}={value} outside expected range [{lo}, {hi}]"
-                        )
-
-                    result.values[corvis_field] = value
-
-            except Exception as e:
-                logger.warning("Page %d OCR failed: %s", page_num, e)
-                result.errors.append(f"Page {page_num}: {e}")
+                result.values[corvis_field] = value
 
         # Report missing page types
         for ptype, label in _PAGE_TYPE_LABELS.items():
