@@ -29,6 +29,7 @@ import logging
 import re
 import subprocess
 import tempfile
+import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,8 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5vl:7b"
 OLLAMA_NUM_CTX = 4096
 OLLAMA_TIMEOUT = 120  # seconds per page
+OLLAMA_MAX_RETRIES = 2  # retries per page on transient errors
+OLLAMA_RETRY_BACKOFF = 2.0  # seconds, doubles each retry
 PDF_DPI = 300
 
 # ── Prompts ─────────────────────────────────────────────────────────
@@ -241,7 +244,11 @@ def parse_corvis_pdf(
 
 
 def check_ollama_available(ollama_url: str = OLLAMA_URL, model: str = OLLAMA_MODEL) -> bool:
-    """Check if Ollama is running and the model is available."""
+    """Check if Ollama is running and the model is available.
+
+    Handles tag normalization: ``qwen2.5vl:7b`` matches both
+    ``qwen2.5vl:7b`` and ``qwen2.5vl:7b-fp16`` in the Ollama model list.
+    """
     try:
         req = urllib.request.Request(
             ollama_url.replace("/api/generate", "/api/tags"),
@@ -249,8 +256,12 @@ def check_ollama_available(ollama_url: str = OLLAMA_URL, model: str = OLLAMA_MOD
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
-            models = [m["name"] for m in data.get("models", [])]
-            return model in models
+            names = [m["name"] for m in data.get("models", [])]
+            # Exact match first, then prefix match (handles tag variants)
+            if model in names:
+                return True
+            model_base = model.split(":")[0]
+            return any(n.startswith(model_base + ":") for n in names) if ":" not in model else False
     except Exception:
         return False
 
@@ -300,7 +311,11 @@ def _query_vlm(
     num_ctx: int,
     timeout: int,
 ) -> str:
-    """Send an image to Ollama VLM and return the text response."""
+    """Send an image to Ollama VLM and return the text response.
+
+    Retries up to ``OLLAMA_MAX_RETRIES`` times on connection / timeout
+    errors with exponential backoff.
+    """
     import base64
 
     with open(image_path, "rb") as f:
@@ -316,16 +331,31 @@ def _query_vlm(
         }
     ).encode()
 
-    req = urllib.request.Request(
-        ollama_url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
+    last_exc: Exception | None = None
+    for attempt in range(1 + OLLAMA_MAX_RETRIES):
+        try:
+            req = urllib.request.Request(
+                ollama_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = json.loads(resp.read())
+            return body.get("response", "")
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_exc = exc
+            if attempt < OLLAMA_MAX_RETRIES:
+                wait = OLLAMA_RETRY_BACKOFF * (2**attempt)
+                logger.warning(
+                    "Ollama request failed (attempt %d/%d): %s — retrying in %.0fs",
+                    attempt + 1,
+                    1 + OLLAMA_MAX_RETRIES,
+                    exc,
+                    wait,
+                )
+                time.sleep(wait)
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = json.loads(resp.read())
-
-    return body.get("response", "")
+    raise last_exc  # type: ignore[misc]
 
 
 def _parse_json_response(text: str) -> dict | None:

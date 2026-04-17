@@ -463,7 +463,11 @@ async def corvis_parse(
     if not check_ollama_available():
         raise HTTPException(
             status_code=503,
-            detail="Ollama VLM not available. Is the ollama service running with qwen2.5vl:7b?",
+            detail=(
+                "Ollama VLM not available. Ensure the ollama service is running "
+                "(systemctl start ollama) and qwen2.5vl:7b is pulled "
+                "(ollama pull qwen2.5vl:7b)."
+            ),
         )
 
     def _do_parse():
