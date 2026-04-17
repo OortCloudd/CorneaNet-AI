@@ -47,7 +47,7 @@ OLLAMA_NUM_CTX = 4096
 OLLAMA_TIMEOUT = 120  # seconds per page
 OLLAMA_MAX_RETRIES = 2  # retries per page on transient errors
 OLLAMA_RETRY_BACKOFF = 2.0  # seconds, doubles each retry
-PDF_DPI = 300
+PDF_DPI = 200
 
 # ── Prompts ─────────────────────────────────────────────────────────
 
