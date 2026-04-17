@@ -129,6 +129,7 @@ class CorvisParseResult:
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     raw_responses: dict[int, str] = field(default_factory=dict)
+    pages_parsed: int = 0
 
 
 # ── Core functions ──────────────────────────────────────────────────
@@ -205,6 +206,8 @@ def parse_corvis_pdf(
                 if parsed is None:
                     result.errors.append(f"Page {page_num}: could not parse JSON from VLM response")
                     continue
+
+                result.pages_parsed += 1
 
                 for vlm_key, value in parsed.items():
                     corvis_field = _KEY_TO_CORVIS_FIELD.get(vlm_key)
@@ -360,6 +363,9 @@ def _query_vlm(
 
 def _parse_json_response(text: str) -> dict | None:
     """Extract a JSON object from a VLM response that may contain markdown fences."""
+    # Strip <think>...</think> blocks (qwen3 reasoning mode)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
     # Try markdown code fence first
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if m:

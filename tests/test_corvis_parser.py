@@ -49,6 +49,14 @@ class TestParseJsonResponse:
         text = '{"A2_Velocity_ms": -0.25}'
         assert _parse_json_response(text) == {"A2_Velocity_ms": -0.25}
 
+    def test_think_tags_stripped(self):
+        text = '<think>\nLet me analyze...\n</think>\n{"IOP_mmHg": 15.0}'
+        assert _parse_json_response(text) == {"IOP_mmHg": 15.0}
+
+    def test_think_tags_with_code_fence(self):
+        text = '<think>reasoning</think>\n```json\n{"a": 1}\n```'
+        assert _parse_json_response(text) == {"a": 1}
+
 
 class TestKeyMapping:
     """Verify key mapping covers all expected fields."""
@@ -100,6 +108,7 @@ class TestCorvisParseResult:
         assert r.warnings == []
         assert r.errors == []
         assert r.raw_responses == {}
+        assert r.pages_parsed == 0
 
 
 class TestParsePdfEdgeCases:

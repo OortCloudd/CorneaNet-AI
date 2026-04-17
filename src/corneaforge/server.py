@@ -479,6 +479,7 @@ async def corvis_parse(
         "values": parsed.values,
         "warnings": parsed.warnings,
         "errors": parsed.errors,
+        "pages_parsed": parsed.pages_parsed,
     }
 
 
