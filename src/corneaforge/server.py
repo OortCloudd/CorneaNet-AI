@@ -491,7 +491,7 @@ async def corvis_parse(
 
 @app.get("/corvis/status")
 def corvis_status():
-    """Check if Corvis PDF parsing is available (Ollama + VLM model)."""
+    """Check if Corvis PDF parsing is available (VLM backend)."""
     available = check_ollama_available()
     return {"available": available}
 

@@ -3,12 +3,16 @@ Corvis ST PDF Parser
 ====================
 
 Extracts biomechanical values from Corvis ST PDF reports using a Vision
-Language Model (Qwen2.5-VL via Ollama).
+Language Model (Qwen2.5-VL 7B).
 
 Corvis ST exports are rasterized screenshots in PDF — no vector text layer.
 Traditional OCR (Tesseract) achieves ~25% accuracy on these. Qwen2.5-VL 7B
 achieves 100% accuracy (16/16 values) on a 6-PDF benchmark with structured
-JSON prompting (~18s per PDF on L40S).
+JSON prompting (~3.5s for 3 pages on L40S via vLLM).
+
+Supports two backends:
+    - ``"openai"`` (default): vLLM or SGLang via OpenAI-compatible API
+    - ``"ollama"``: Ollama (slower, ~10s)
 
 Usage:
     from corneaforge.corvis_parser import parse_corvis_pdf
@@ -20,7 +24,7 @@ Usage:
     # result.errors       → list of pages/fields that failed parsing
 
 Requirements:
-    - Ollama running locally with qwen2.5vl:7b pulled
+    - vLLM with Qwen2.5-VL-7B-Instruct on port 8100 (or Ollama as fallback)
     - pdftoppm (poppler-utils) on PATH for PDF→PNG rendering
 """
 
@@ -42,15 +46,15 @@ logger = logging.getLogger("corneaforge.corvis_parser")
 # ── Configuration ───────────────────────────────────────────────────
 
 # Backend: "ollama" or "openai" (for vLLM / SGLang).
-VLM_BACKEND = "ollama"
+VLM_BACKEND = "openai"
 
-# Ollama backend
+# Ollama backend (fallback)
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5vl:7b"
 OLLAMA_NUM_CTX = 4096
 
-# OpenAI-compatible backend (vLLM / SGLang)
-OPENAI_URL = "http://localhost:8200/v1/chat/completions"
+# OpenAI-compatible backend — vLLM (default)
+OPENAI_URL = "http://localhost:8100/v1/chat/completions"
 OPENAI_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 # Shared
