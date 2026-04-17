@@ -6,16 +6,18 @@ Extracts biomechanical values from Corvis ST PDF reports using a Vision
 Language Model (Qwen2.5-VL via Ollama).
 
 Corvis ST exports are rasterized screenshots in PDF — no vector text layer.
-Traditional OCR (Tesseract) achieves ~25% accuracy on these. A VLM achieves
-~94% with structured JSON prompting.
+Traditional OCR (Tesseract) achieves ~25% accuracy on these. Qwen2.5-VL 7B
+achieves 100% accuracy (16/16 values) on a 6-PDF benchmark with structured
+JSON prompting (~18s per PDF on L40S).
 
 Usage:
     from corneaforge.corvis_parser import parse_corvis_pdf
 
     result = parse_corvis_pdf(pdf_bytes)
-    # result.values  → dict of extracted values
-    # result.raw     → per-page raw model responses (for debugging)
-    # result.errors  → list of pages/fields that failed parsing
+    # result.values       → dict of extracted values
+    # result.pages_parsed → number of pages successfully parsed (out of 3)
+    # result.warnings     → out-of-range value warnings
+    # result.errors       → list of pages/fields that failed parsing
 
 Requirements:
     - Ollama running locally with qwen2.5vl:7b pulled

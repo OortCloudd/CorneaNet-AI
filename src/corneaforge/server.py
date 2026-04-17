@@ -475,6 +475,16 @@ async def corvis_parse(
 
     parsed: CorvisParseResult = await asyncio.to_thread(_do_parse)
 
+    logger.info(
+        "Corvis OCR: %d/16 values, %d/3 pages, %d warnings, %d errors",
+        len(parsed.values),
+        parsed.pages_parsed,
+        len(parsed.warnings),
+        len(parsed.errors),
+    )
+    if parsed.errors:
+        logger.warning("Corvis OCR errors: %s", parsed.errors)
+
     return {
         "values": parsed.values,
         "warnings": parsed.warnings,
