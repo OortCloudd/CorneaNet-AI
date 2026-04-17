@@ -11,6 +11,7 @@ import pytest
 
 from corneaforge.corvis_parser import (
     _KEY_TO_CORVIS_FIELD,
+    _PAGE_TYPE_LABELS,
     _VALUE_RANGES,
     CorvisParseResult,
     _parse_json_response,
@@ -85,6 +86,16 @@ class TestKeyMapping:
     def test_all_mapped_fields_have_ranges(self):
         for corvis_field in _KEY_TO_CORVIS_FIELD.values():
             assert corvis_field in _VALUE_RANGES, f"Missing range for {corvis_field}"
+
+
+class TestPageTypes:
+    """Verify page type definitions."""
+
+    def test_three_page_types(self):
+        assert len(_PAGE_TYPE_LABELS) == 3
+
+    def test_expected_types(self):
+        assert set(_PAGE_TYPE_LABELS) == {"iop_pachy", "dynamic_response", "vinciguerra"}
 
 
 class TestValueRanges:

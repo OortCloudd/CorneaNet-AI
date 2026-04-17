@@ -50,34 +50,35 @@ PDF_DPI = 300
 
 # ── Prompts ─────────────────────────────────────────────────────────
 
-_PROMPT_PAGE_1 = (
-    "Extract from this Corvis ST IOP/Pachy page. Return ONLY JSON:\n"
-    '{"IOP_mmHg": <number>, "CCT_um": <number>}'
-)
-
-_PROMPT_PAGE_2 = (
-    "This is a Corvis ST Dynamic Corneal Response report.\n"
-    "Look at the bottom-left table. It has these rows:\n"
-    '- "Applanation 1": Length and Velocity\n'
-    '- "Highest Concavity": Peak Distance, Radius, Deformation Amplitude\n'
-    '- "Applanation 2": Length and Velocity\n'
-    "Note: A2 Velocity is NEGATIVE.\n"
-    "Return ONLY JSON:\n"
-    '{"A1_Velocity_ms": <number>, "A2_Velocity_ms": <negative number>, '
+_EXTRACT_PROMPT = (
+    "This is a page from a Corvis ST PDF report. "
+    "Identify the page type and extract the relevant values.\n\n"
+    "If IOP/Pachymetry page, return:\n"
+    '{"page_type": "iop_pachy", "IOP_mmHg": <number>, "CCT_um": <number>}\n\n'
+    "If Dynamic Corneal Response page (bottom-left table with "
+    "Applanation 1/2 rows for Length and Velocity, Highest Concavity row "
+    "for Peak Distance, Radius, Deformation Amplitude — "
+    "note A2 Velocity is NEGATIVE), return:\n"
+    '{"page_type": "dynamic_response", '
+    '"A1_Velocity_ms": <number>, "A2_Velocity_ms": <negative number>, '
     '"Peak_Distance_mm": <number>, "Deformation_Amplitude_mm": <number>, '
-    '"A1_Length_mm": <number>, "A2_Length_mm": <number>, "Radius_HC_mm": <number>}'
-)
-
-_PROMPT_PAGE_3 = (
-    "Extract from this Corvis ST Vinciguerra Screening Report page. "
-    "Look at the summary table on the right.\n"
-    "Return ONLY JSON:\n"
-    '{"SP_A1": <number>, "ARTh": <number>, "bIOP_mmHg": <number>, '
+    '"A1_Length_mm": <number>, "A2_Length_mm": <number>, '
+    '"Radius_HC_mm": <number>}\n\n'
+    "If Vinciguerra Screening Report page (summary table on the right "
+    "with CBI, SSI, SP-A1), return:\n"
+    '{"page_type": "vinciguerra", '
+    '"SP_A1": <number>, "ARTh": <number>, "bIOP_mmHg": <number>, '
     '"DA_Ratio": <number>, "Inverse_Concave_Radius_mm": <number>, '
-    '"CBI": <number>, "SSI": <number>}'
+    '"CBI": <number>, "SSI": <number>}\n\n'
+    "Return ONLY the JSON for the matching page type."
 )
 
-_PAGE_PROMPTS = {1: _PROMPT_PAGE_1, 2: _PROMPT_PAGE_2, 3: _PROMPT_PAGE_3}
+# Page types and human-readable labels (for error messages).
+_PAGE_TYPE_LABELS = {
+    "iop_pachy": "IOP/Pachymetry",
+    "dynamic_response": "Dynamic Corneal Response",
+    "vinciguerra": "Vinciguerra Screening Report",
+}
 
 # Maps VLM JSON keys → CorvisInput field names (server.py).
 _KEY_TO_CORVIS_FIELD = {
@@ -182,21 +183,15 @@ def parse_corvis_pdf(
         result.errors.append("Failed to render PDF pages")
         return result
 
-    n_pages = len(page_paths)
-    if n_pages < 3:
-        result.warnings.append(f"Expected 3 pages, got {n_pages}. Some values may be missing.")
+    found_types: set[str] = set()
 
     try:
-        for page_num in range(1, min(n_pages + 1, 4)):
-            prompt = _PAGE_PROMPTS.get(page_num)
-            if not prompt:
-                continue
-
-            page_path = page_paths[page_num - 1]
+        for page_idx, page_path in enumerate(page_paths):
+            page_num = page_idx + 1
             try:
                 raw_response = _query_vlm(
                     page_path,
-                    prompt,
+                    _EXTRACT_PROMPT,
                     ollama_url=ollama_url,
                     model=model,
                     num_ctx=num_ctx,
@@ -209,6 +204,20 @@ def parse_corvis_pdf(
                     result.errors.append(f"Page {page_num}: could not parse JSON from VLM response")
                     continue
 
+                # Identify page type
+                page_type = parsed.pop("page_type", None)
+                if page_type not in _PAGE_TYPE_LABELS:
+                    result.errors.append(f"Page {page_num}: unrecognized page type {page_type!r}")
+                    continue
+
+                if page_type in found_types:
+                    result.warnings.append(
+                        f"Page {page_num}: duplicate {_PAGE_TYPE_LABELS[page_type]} "
+                        f"page (using first occurrence)"
+                    )
+                    continue
+
+                found_types.add(page_type)
                 result.pages_parsed += 1
 
                 for vlm_key, value in parsed.items():
@@ -236,6 +245,11 @@ def parse_corvis_pdf(
             except Exception as e:
                 logger.warning("Page %d OCR failed: %s", page_num, e)
                 result.errors.append(f"Page {page_num}: {e}")
+
+        # Report missing page types
+        for ptype, label in _PAGE_TYPE_LABELS.items():
+            if ptype not in found_types:
+                result.errors.append(f"Missing page: {label}")
 
     finally:
         # Clean up temp PNGs
