@@ -162,6 +162,14 @@ def parse_corvis_pdf(
     """
     result = CorvisParseResult()
 
+    # Validate input
+    if not pdf_bytes:
+        result.errors.append("Empty PDF data")
+        return result
+    if not pdf_bytes[:5].startswith(b"%PDF-"):
+        result.errors.append("Not a valid PDF file (bad magic bytes)")
+        return result
+
     # Render PDF pages to PNGs
     page_paths = _pdf_to_pngs(pdf_bytes)
     if not page_paths:

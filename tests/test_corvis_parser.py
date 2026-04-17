@@ -102,6 +102,31 @@ class TestCorvisParseResult:
         assert r.raw_responses == {}
 
 
+class TestParsePdfEdgeCases:
+    """Test parse_corvis_pdf input validation."""
+
+    def test_empty_bytes(self):
+        result = parse_corvis_pdf(b"")
+        assert result.values == {}
+        assert any("Empty" in e for e in result.errors)
+
+    def test_not_a_pdf(self):
+        result = parse_corvis_pdf(b"This is not a PDF file at all")
+        assert result.values == {}
+        assert any("magic bytes" in e for e in result.errors)
+
+    def test_png_bytes(self):
+        result = parse_corvis_pdf(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        assert result.values == {}
+        assert any("magic bytes" in e for e in result.errors)
+
+    def test_truncated_pdf(self):
+        """A valid PDF header but truncated content should fail at render, not crash."""
+        result = parse_corvis_pdf(b"%PDF-1.4 truncated")
+        assert result.values == {}
+        assert len(result.errors) > 0
+
+
 # ── Integration tests (require Ollama) ──────────────────────────────
 
 CORVIS_PDF = os.path.join(
@@ -204,6 +229,15 @@ class TestCorvisEndpoints:
             "/corvis/parse", files={"corvis_pdf": ("test.pdf", b"", "application/pdf")}
         )
         assert resp.status_code == 400
+
+    def test_corvis_parse_wrong_extension(self):
+        client = TestClient(app)
+        resp = client.post(
+            "/corvis/parse",
+            files={"corvis_pdf": ("image.png", b"%PDF-fake", "application/pdf")},
+        )
+        assert resp.status_code == 400
+        assert "PDF" in resp.json()["detail"]
 
     @needs_ollama
     @needs_pdf

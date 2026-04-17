@@ -453,6 +453,9 @@ async def corvis_parse(
     contents = await corvis_pdf.read()
     if not contents:
         raise HTTPException(status_code=400, detail="corvis_pdf file is empty")
+    fname = corvis_pdf.filename or ""
+    if not fname.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="File must be a PDF (.pdf extension)")
     if len(contents) > MAX_FILE_SIZE:
         max_mb = MAX_FILE_SIZE // 1024 // 1024
         raise HTTPException(status_code=413, detail=f"corvis_pdf exceeds {max_mb}MB limit")
