@@ -308,7 +308,11 @@
                     <div style="margin-top:8px;">
                         <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
                             <div class="upload-zone" style="flex:1; margin-bottom:0; padding:12px;"
-                                 onclick="document.getElementById('file-corvis-pdf').click()">
+                                 id="corvis-drop-zone"
+                                 onclick="document.getElementById('file-corvis-pdf').click()"
+                                 ondragover="event.preventDefault(); this.style.borderColor='#2196f3'; this.style.background='#e3f2fd';"
+                                 ondragleave="this.style.borderColor=''; this.style.background='';"
+                                 ondrop="handleCorvisDrop(event)">
                                 <div class="zone-label" style="font-size:12px;">Drop Corvis ST PDF here</div>
                                 <div class="zone-filename" id="name-corvis-pdf" style="font-size:11px;"></div>
                                 <input type="file" id="file-corvis-pdf" accept=".pdf"
@@ -445,6 +449,25 @@
 
         // ── Corvis PDF OCR ──
 
+        function handleCorvisDrop(event) {
+            event.preventDefault();
+            const zone = document.getElementById('corvis-drop-zone');
+            zone.style.borderColor = '';
+            zone.style.background = '';
+            const file = event.dataTransfer.files[0];
+            if (!file) return;
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                alert('Please drop a PDF file.');
+                return;
+            }
+            // Assign the dropped file to the input element
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            const input = document.getElementById('file-corvis-pdf');
+            input.files = dt.files;
+            onFileSelect(input, 'name-corvis-pdf');
+        }
+
         async function runCorvisOCR() {
             const pdfFile = document.getElementById('file-corvis-pdf').files[0];
             if (!pdfFile) {
@@ -459,8 +482,13 @@
             btnOcr.disabled = true;
             spinner.style.display = '';
             spinner.classList.add('active');
-            statusEl.textContent = 'Extracting values from PDF...';
+            statusEl.textContent = 'Extracting values from PDF (3 pages, ~20 seconds)...';
             statusEl.style.color = '#666';
+
+            // Reset all corvis field backgrounds
+            document.querySelectorAll('#corvis-fields input').forEach(i => {
+                i.style.backgroundColor = '';
+            });
 
             try {
                 const form = new FormData();
@@ -475,18 +503,21 @@
                     return;
                 }
 
-                // Fill in the form fields with OCR'd values
+                // Fill in extracted values (green) and mark missing ones (orange)
+                const extractedKeys = new Set(Object.keys(data.values));
                 let filled = 0;
-                for (const [key, value] of Object.entries(data.values)) {
-                    const input = document.querySelector(`#corvis-fields input[name="${key}"]`);
-                    if (input && value !== null) {
-                        input.value = value;
+                document.querySelectorAll('#corvis-fields input').forEach(input => {
+                    const name = input.getAttribute('name');
+                    if (extractedKeys.has(name)) {
+                        input.value = data.values[name];
                         input.style.backgroundColor = '#e8f5e9';
                         filled++;
+                    } else if (data.pages_parsed > 0 && !input.value) {
+                        input.style.backgroundColor = '#fff3e0';
                     }
-                }
+                });
 
-                let msg = filled + '/' + Object.keys(data.values).length + ' values extracted.';
+                let msg = filled + '/16 values extracted (' + (data.pages_parsed || 0) + '/3 pages).';
                 if (data.warnings.length > 0) {
                     msg += ' Warnings: ' + data.warnings.join('; ');
                 }
