@@ -186,38 +186,40 @@ def parse_corvis_pdf(
         result.errors.append("Not a valid PDF file (bad magic bytes)")
         return result
 
-    # Render PDF pages to PNGs
-    page_paths = _pdf_to_pngs(pdf_bytes)
-    if not page_paths:
+    # Count pages by rendering once (fast, no PNG output)
+    n_pages = _count_pdf_pages(pdf_bytes)
+    if n_pages == 0:
         result.errors.append("Failed to render PDF pages")
         return result
 
     try:
-        # Query VLM for all pages in parallel
-        page_responses: dict[int, str | Exception] = {}
-        with ThreadPoolExecutor(max_workers=len(page_paths)) as pool:
-            futures = {
-                pool.submit(
-                    _query_vlm,
+        # Render each page + query VLM in parallel (pipelined)
+        def _render_and_query(page_num: int) -> str:
+            page_path = _render_single_page(pdf_bytes, page_num)
+            try:
+                return _query_vlm(
                     page_path,
                     _EXTRACT_PROMPT,
                     backend=backend,
                     timeout=timeout,
-                ): page_idx
-                for page_idx, page_path in enumerate(page_paths)
-            }
+                )
+            finally:
+                Path(page_path).unlink(missing_ok=True)
+
+        page_responses: dict[int, str | Exception] = {}
+        with ThreadPoolExecutor(max_workers=min(n_pages, 6)) as pool:
+            futures = {pool.submit(_render_and_query, pg): pg for pg in range(1, n_pages + 1)}
             for future in as_completed(futures):
-                page_idx = futures[future]
+                pg = futures[future]
                 try:
-                    page_responses[page_idx] = future.result()
+                    page_responses[pg] = future.result()
                 except Exception as exc:
-                    page_responses[page_idx] = exc
+                    page_responses[pg] = exc
 
         # Process responses in page order
         found_types: set[str] = set()
-        for page_idx in sorted(page_responses):
-            page_num = page_idx + 1
-            resp = page_responses[page_idx]
+        for page_num in sorted(page_responses):
+            resp = page_responses[page_num]
 
             if isinstance(resp, Exception):
                 logger.warning("Page %d OCR failed: %s", page_num, resp)
@@ -273,12 +275,7 @@ def parse_corvis_pdf(
                 result.errors.append(f"Missing page: {label}")
 
     finally:
-        # Clean up temp PNGs
-        for p in page_paths:
-            try:
-                Path(p).unlink(missing_ok=True)
-            except OSError:
-                pass
+        pass  # PNGs cleaned up per-thread in _render_and_query
 
     return result
 
@@ -320,35 +317,64 @@ check_ollama_available = check_vlm_available
 # ── Internal helpers ────────────────────────────────────────────────
 
 
-def _pdf_to_pngs(pdf_bytes: bytes) -> list[str]:
-    """Render PDF pages to PNG files using pdftoppm. Returns list of paths."""
+def _count_pdf_pages(pdf_bytes: bytes) -> int:
+    """Count pages in a PDF without rendering (fast)."""
+    # Look for /Type /Page occurrences — rough but avoids spawning a process.
+    # Falls back to pdfinfo if available.
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(pdf_bytes)
+            tmp_pdf = tmp.name
+        proc = subprocess.run(
+            ["pdfinfo", tmp_pdf],
+            capture_output=True,
+            timeout=5,
+        )
+        Path(tmp_pdf).unlink(missing_ok=True)
+        if proc.returncode == 0:
+            for line in proc.stdout.decode().splitlines():
+                if line.startswith("Pages:"):
+                    return int(line.split(":")[1].strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    # Fallback: count via grep in PDF binary (works for most PDFs)
+    return pdf_bytes.count(b"/Type /Page") - pdf_bytes.count(b"/Type /Pages")
+
+
+def _render_single_page(pdf_bytes: bytes, page_num: int) -> str:
+    """Render one PDF page to a temp PNG. Caller must unlink the result."""
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(pdf_bytes)
         tmp_pdf = tmp.name
 
     try:
-        out_prefix = tmp_pdf.replace(".pdf", "")
+        out_prefix = tmp_pdf.replace(".pdf", f"_p{page_num}")
         proc = subprocess.run(
-            ["pdftoppm", "-r", str(PDF_DPI), "-png", tmp_pdf, out_prefix],
+            [
+                "pdftoppm",
+                "-r",
+                str(PDF_DPI),
+                "-png",
+                "-f",
+                str(page_num),
+                "-l",
+                str(page_num),
+                tmp_pdf,
+                out_prefix,
+            ],
             capture_output=True,
-            timeout=30,
+            timeout=15,
         )
         if proc.returncode != 0:
-            logger.error("pdftoppm failed: %s", proc.stderr.decode())
-            return []
+            raise RuntimeError(f"pdftoppm failed: {proc.stderr.decode()}")
 
-        # pdftoppm creates files like prefix-1.png, prefix-2.png, ...
         parent = Path(tmp_pdf).parent
         prefix = Path(out_prefix).name
-        pages = sorted(parent.glob(f"{prefix}-*.png"))
-        return [str(p) for p in pages]
+        pngs = sorted(parent.glob(f"{prefix}-*.png"))
+        if not pngs:
+            raise RuntimeError("pdftoppm produced no output")
+        return str(pngs[0])
 
-    except FileNotFoundError:
-        logger.error("pdftoppm not found. Install poppler-utils.")
-        return []
-    except subprocess.TimeoutExpired:
-        logger.error("pdftoppm timed out")
-        return []
     finally:
         Path(tmp_pdf).unlink(missing_ok=True)
 
